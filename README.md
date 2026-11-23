@@ -1,4 +1,4 @@
-# 第 1 堂：接通 + 收發（純字串 → JSON）
+# 第 1 堂：接通 + 收發（純字串 → JSON）（完成版）
 
 > 分支：`step-1-connect`（starter）／`step-1-connect-done`（完成版）
 > Server：講師先開「純字串」等級，升級 JSON 時切到「回音」等級（廣播包含自己）
