@@ -156,6 +156,8 @@ Future<void> _run() async {
   final pairId = (await _getJson('/rooms?user=Amy-2'))['assigned_room_id'] as String;
   _check(pairId == (await _getJson('/rooms?user=Bob'))['assigned_room_id'] && pairId.startsWith('pair:'),
       '兩兩一組：Amy、Amy-2（同一人）與 Bob 同房');
+  final pairAdded = await b2.next('room_added');
+  _check(((pairAdded['room'] as Map)['members'] as List).length == 4, '分房推的 room_added 成員名單完整（Amy、Amy-2、Bob、Teacher）');
   b2.received.clear();
   a4.sendMsg('id-p1', '不帶 room_id');
   final ackP = await a4.next('ack');
@@ -164,6 +166,8 @@ Future<void> _run() async {
   _check(((await _getJson('/rooms?user=Amy'))['rooms'] as List).length == 1, '分房＝搬家：離開舊的私人房');
 
   // ── 第 8 堂：拉群 room_added、私聊自動建房 ──
+  final online = ((await _getJson('/users'))['online'] as List).cast<String>();
+  _check(online.contains('Bob') && online.contains('Amy-2'), 'GET /users 列出在線學員');
   for (final c in [a2, a4, b2]) {
     c.received.clear(); // 清掉兩兩一組推的 room_added
   }

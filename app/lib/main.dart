@@ -1,34 +1,30 @@
 import 'package:flutter/material.dart';
 
+import 'config.dart';
+import 'data/chat_service.dart';
 import 'data/local_message_store.dart';
-import 'ui/chat_page.dart';
+import 'ui/room_list_page.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  final store = await LocalMessageStore.open();
-  runApp(ChatWorkshopApp(store: store));
+void main() {
+  runApp(const ChatWorkshopApp());
 }
 
 class ChatWorkshopApp extends StatelessWidget {
-  const ChatWorkshopApp({super.key, required this.store});
-
-  final LocalMessageStore store;
+  const ChatWorkshopApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Chat Workshop',
       theme: ThemeData(colorSchemeSeed: Colors.teal),
-      home: NamePage(store: store),
+      home: presetUser.isNotEmpty ? const _Boot(user: presetUser) : const NamePage(),
     );
   }
 }
 
-/// 進聊天室前先取暱稱（用來判斷哪些訊息是「我的」）
+/// 進聊天室前先取暱稱（用來判斷哪些訊息是「我的」；也是 WS 的身分）
 class NamePage extends StatefulWidget {
-  const NamePage({super.key, required this.store});
-
-  final LocalMessageStore store;
+  const NamePage({super.key});
 
   @override
   State<NamePage> createState() => _NamePageState();
@@ -40,9 +36,7 @@ class _NamePageState extends State<NamePage> {
   void _enter() {
     final name = _name.text.trim();
     if (name.isEmpty) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(builder: (_) => ChatPage(me: name, store: widget.store)),
-    );
+    Navigator.of(context).pushReplacement(MaterialPageRoute<void>(builder: (_) => _Boot(user: name)));
   }
 
   @override
@@ -75,5 +69,40 @@ class _NamePageState extends State<NamePage> {
         ),
       ),
     );
+  }
+}
+
+/// 開 DB、建立 App 層級的唯一連線，然後進房間列表
+class _Boot extends StatefulWidget {
+  const _Boot({required this.user});
+
+  final String user;
+
+  @override
+  State<_Boot> createState() => _BootState();
+}
+
+class _BootState extends State<_Boot> {
+  ChatService? _service;
+
+  @override
+  void initState() {
+    super.initState();
+    LocalMessageStore.open(widget.user).then((store) {
+      if (mounted) setState(() => _service = ChatService(me: widget.user, store: store)..start());
+    });
+  }
+
+  @override
+  void dispose() {
+    _service?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final service = _service;
+    if (service == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return RoomListPage(service: service);
   }
 }

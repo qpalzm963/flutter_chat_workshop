@@ -37,6 +37,7 @@
 //         last_message,last_read_seq,reads:{user:seq}}]}
 //   GET /rooms/{id}/messages?before_seq=X | after_seq=X | around_seq=X  [&limit=50]
 //       不帶 cursor → 最新一頁；limit 預設 50、上限 200
+//   GET /users                     {"online":[...]}  在線學員（第 8 堂私聊選人）
 //   GET /messages?user=Amy&...     同上，房間＝講師分配給 Amy 的房間（第 6～7 堂用，還沒有 room_id）
 //
 // ── 現場搞破壞指令（直接在聊天室輸入；訊息照常儲存與 ACK，之後才生效）──
@@ -119,6 +120,7 @@ Future<void> _handle(HttpRequest req) async {
   if (req.method == 'GET' && path == '/admin/state') return _json(req, _adminState(req.uri.queryParameters['room']));
   if (req.method == 'POST' && path == '/admin/action') return _adminAction(req);
   if (req.method == 'GET' && path == '/rooms') return _getRooms(req);
+  if (req.method == 'GET' && path == '/users') return _json(req, {'online': conns.keys.toList()..sort()});
   if (req.method == 'GET' && path == '/messages') {
     final room = rooms[assigned[req.uri.queryParameters['user']]];
     if (room == null) return _json(req, {'error': 'unknown user'}, status: 404);
@@ -165,7 +167,7 @@ Future<void> _handleWs(HttpRequest req) async {
   conns[user] = conn;
   _attempt(user, 'ok');
   _log('+ $user (${conns.length} online)');
-  if (!assigned.containsKey(user)) _assign(user, _privateRoom(user));
+  if (!assigned.containsKey(user)) _assign([user], _privateRoom(user));
   ws.listen(
     (data) => _onData(conn, data),
     onDone: () {
@@ -312,16 +314,16 @@ String _base(String user) => user.split('-').first; // Amy 與 Amy-2（第二台
 
 Room _privateRoom(String user) => _room('private:${_base(user)}', '${_base(user)} 的私人房', 'private');
 
-/// 分房（私人房 / 兩兩一組 / 大廳）＝搬家：離開舊的分配房、加入新房
-void _assign(String user, Room room) {
-  final old = assigned[user];
-  if (old != null && old != room.id) rooms[old]?.members.remove(user);
-  assigned[user] = room.id;
+/// 分房（私人房 / 兩兩一組 / 大廳）＝搬家：離開舊的分配房、加入新房（整批加完才推 room_added）
+void _assign(Iterable<String> users, Room room) {
+  for (final user in users) {
+    final old = assigned[user];
+    if (old != null && old != room.id) rooms[old]?.members.remove(user);
+    assigned[user] = room.id;
+  }
   _dirty = true;
-  _addMember(room, user);
+  _addMembers(room, users);
 }
-
-void _addMember(Room room, String user) => _addMembers(room, [user]);
 
 /// 先全部加完再推 room_added，每個人拿到的成員名單才完整
 void _addMembers(Room room, Iterable<String> users) {
@@ -502,14 +504,14 @@ Future<void> _adminAction(HttpRequest req) async {
     case 'assign':
       switch (body['mode']) {
         case 'private':
+          final byRoom = <Room, List<String>>{};
           for (final u in online) {
-            _assign(u, _privateRoom(u));
+            byRoom.putIfAbsent(_privateRoom(u), () => []).add(u);
           }
+          byRoom.forEach((r, users) => _assign(users, r));
         case 'lobby':
           final lobby = _room('lobby', '大廳', 'lobby');
-          for (final u in online) {
-            _assign(u, lobby);
-          }
+          _assign(online, lobby);
         case 'pairs':
           // 以「人」為單位兩兩一組（Amy 與 Amy-2 算同一人）；奇數時最後一組 3 人
           final groups = <String, List<String>>{};
@@ -521,11 +523,7 @@ Future<void> _adminAction(HttpRequest req) async {
             final take = (bases.length - i == 3) ? 3 : 2;
             final chunk = bases.sublist(i, (i + take).clamp(0, bases.length));
             final r = _room('pair:${chunk.join(':')}', chunk.join(' & '), 'pair');
-            for (final b in chunk) {
-              for (final u in groups[b]!) {
-                _assign(u, r);
-              }
-            }
+            _assign([for (final b in chunk) ...groups[b]!], r);
             if (take == 3) break;
           }
       }

@@ -5,7 +5,9 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-enum ConnectionStatus { connecting, connected, disconnected }
+import '../models/connection_status.dart';
+
+export '../models/connection_status.dart';
 
 /// WebSocket 通道：一通不掛斷的電話。
 /// 負責：連線、心跳偵測假死、Exponential Backoff + Jitter 重連。
