@@ -7,13 +7,14 @@ import '../config.dart';
 import '../models/connection_status.dart';
 import '../models/message.dart';
 import 'chat_socket.dart';
+import 'history_api.dart';
 import 'local_message_store.dart';
 
 /// 單向資料流：
 ///   UI ──send()──▶ DB(sending) ──▶ WS
 ///   WS ──寫入──▶ DB ──Stream──▶ UI
 class ChatController {
-  ChatController({required this.me, required this.store}) : socket = ChatSocket(wsUrl(me));
+  ChatController({required this.me, required this.store}) : socket = ChatSocket(wsUrl(me)), api = HistoryApi(me);
 
   /// 我的名字（也是連線身分）
   final String me;
@@ -21,6 +22,7 @@ class ChatController {
 
   /// 本地 DB（SSOT）：UI 只看它，WS 只寫它
   final LocalMessageStore store;
+  final HistoryApi api;
 
   /// 連線狀態：直接用 socket 的（連線橫幅已經接好）
   ValueNotifier<ConnectionStatus> get status => socket.status;
@@ -30,16 +32,33 @@ class ChatController {
   final _uuid = const Uuid();
   StreamSubscription<Map<String, dynamic>>? _sub;
 
-  // TODO(第 6 堂) 準備 HistoryApi(me)、本地視窗大小 limit（ValueNotifier，預設一頁 50 則）、載入中旗標
+  /// 本地查詢視窗大小（兩段式分頁的第一段：先擴大它，本地不夠才打 API）
+  final limit = ValueNotifier(HistoryApi.pageSize);
+  final loadingOlder = ValueNotifier(false);
+  bool _noMoreHistory = false;
 
-  /// 訊息列表，最新在前：直接訂閱 DB
-  // TODO(第 6 堂) ② 改成只看本地最新的 limit 則
-  Stream<List<Message>> get messages => store.watchMessages();
+  /// 訊息列表，最新在前：只看本地最新的 [limit] 則
+  late final Stream<List<Message>> messages = store.watchMessages(limit);
 
-  // TODO(第 6 堂) ① 進房（連上）時本地 DB 是空的 → 抓最新一頁寫進 DB；不是空的就不要抓
   void connect() {
     _sub = socket.events.listen(_onEvent);
+    socket.status.addListener(_onStatusChanged);
     socket.connect();
+  }
+
+  void _onStatusChanged() {
+    if (socket.status.value == ConnectionStatus.connected) _loadLatestIfEmpty();
+  }
+
+  /// 本地是空的（例如換新手機）→ 抓最新一頁。
+  /// 本地不是空的就不能抓：最新一頁跟本地最新那則之間可能有 App 不知道的斷層（第 7 堂處理）。
+  Future<void> _loadLatestIfEmpty() async {
+    try {
+      if (await store.latestSeq() != null) return;
+      await store.upsertFromServer(await api.fetch());
+    } catch (_) {
+      // 拿不到就先看本地的，下次連上再試
+    }
   }
 
   // ───────────── 發送：Optimistic UI + ACK + 冪等 ─────────────
@@ -84,10 +103,29 @@ class ChatController {
     }
   }
 
-  /// 快捲到頂時由 UI 呼叫
+  /// 快捲到頂時由 UI 呼叫。兩段式分頁：先擴大本地視窗，本地不夠才以最舊 seq 打 before_seq
   Future<void> loadOlder() async {
-    // TODO(第 6 堂) ③ 兩段式分頁：先擴大本地視窗；本地不夠才用最舊的 seq 打 before_seq，結果寫進 DB
-    // TODO(第 6 堂) ④ 載入中不要重複打；判斷「沒有更早的訊息了」
+    if (loadingOlder.value || _noMoreHistory) return;
+    loadingOlder.value = true;
+    try {
+      if (await store.count() > limit.value) {
+        limit.value += HistoryApi.pageSize; // 第一段：本地還有，免打 API
+        return;
+      }
+      final oldest = await store.oldestSeq();
+      if (oldest == null || oldest <= 1) {
+        _noMoreHistory = true; // seq 從 1 開始連續：最舊就是 1
+        return;
+      }
+      final page = await api.fetch(beforeSeq: oldest);
+      if (page.length < HistoryApi.pageSize) _noMoreHistory = true;
+      await store.upsertFromServer(page);
+      limit.value += page.length;
+    } catch (_) {
+      // 網路失敗：下次滑到頂再試
+    } finally {
+      loadingOlder.value = false;
+    }
   }
 
   void dispose() {
@@ -95,6 +133,9 @@ class ChatController {
       t.cancel();
     }
     _sub?.cancel();
+    socket.status.removeListener(_onStatusChanged);
     socket.dispose();
+    limit.dispose();
+    loadingOlder.dispose();
   }
 }

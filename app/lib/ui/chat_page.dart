@@ -5,6 +5,7 @@ import '../data/local_message_store.dart';
 import '../models/message.dart';
 import 'chat_input.dart';
 import 'connection_banner.dart';
+import 'loading_older_indicator.dart';
 import 'message_bubble.dart';
 
 class ChatPage extends StatefulWidget {
@@ -36,9 +37,9 @@ class _ChatPageState extends State<ChatPage> {
     _scroll.addListener(_onScroll);
   }
 
-  // TODO(第 6 堂) ③ 快捲到頂（reverse 列表的頂部是 maxScrollExtent）時呼叫 _chat.loadOlder()
-  // TODO(第 6 堂) 在列表最上面放 LoadingOlderIndicator（ui/loading_older_indicator.dart）
   void _onScroll() {
+    // reverse 列表的「頂部」是 maxScrollExtent：快到頂就拉舊訊息
+    if (_scroll.position.pixels > _scroll.position.maxScrollExtent - 300) _chat.loadOlder();
     if (_hasUnseen && _isAtBottom) setState(() => _hasUnseen = false);
   }
 
@@ -91,8 +92,9 @@ class _ChatPageState extends State<ChatPage> {
                     return ListView.builder(
                       controller: _scroll,
                       reverse: true, // Bottom-anchored：index 0 = 最新 = 最底
-                      itemCount: list.length,
+                      itemCount: list.length + 1, // 最後一個（最上面）是載入中轉圈
                       itemBuilder: (context, i) {
+                        if (i == list.length) return LoadingOlderIndicator(loading: _chat.loadingOlder);
                         final m = list[i];
                         final isMine = m.sender == widget.me;
                         return MessageBubble(

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -41,19 +42,32 @@ class LocalMessageStore {
     return LocalMessageStore._(db);
   }
 
-  /// 最新在前（index 0），配合 ListView(reverse: true)。還沒拿到 seq 的排最前面。
-  /// 先查一次，之後每收到一次「資料變了」的通知就重查。
-  // TODO(第 6 堂) ② 加上 limit：只撈最新 N 則（limit 變大時也要重新查詢）
-  Stream<List<Message>> watchMessages() async* {
-    yield await _queryAll();
-    await for (final _ in _changes.stream) {
-      yield await _queryAll();
+  /// 本地查詢視窗：只撈最新 [limit] 則，最新在前（index 0），配合 reverse 列表。
+  /// 還沒拿到 seq 的（自己剛送出的）排最前面。limit 變大或 DB 變動都會重新查詢。
+  Stream<List<Message>> watchMessages(ValueListenable<int> limit) {
+    late final StreamController<List<Message>> out;
+    StreamSubscription<void>? sub;
+    var generation = 0;
+    Future<void> emit() async {
+      final my = ++generation;
+      final rows = await _db.rawQuery('SELECT * FROM messages ORDER BY seq IS NULL DESC, seq DESC, ts DESC LIMIT ?', [
+        limit.value,
+      ]);
+      if (my == generation && !out.isClosed) out.add(rows.map(Message.fromRow).toList()); // 丟掉過期的查詢結果
     }
-  }
 
-  Future<List<Message>> _queryAll() async {
-    final rows = await _db.rawQuery('SELECT * FROM messages ORDER BY seq IS NULL DESC, seq DESC, ts DESC');
-    return rows.map(Message.fromRow).toList();
+    out = StreamController<List<Message>>(
+      onListen: () {
+        emit();
+        sub = _changes.stream.listen((_) => emit());
+        limit.addListener(emit);
+      },
+      onCancel: () {
+        sub?.cancel();
+        limit.removeListener(emit);
+      },
+    );
+    return out.stream;
   }
 
   Future<int> count() async => Sqflite.firstIntValue(await _db.rawQuery('SELECT COUNT(*) FROM messages'))!;

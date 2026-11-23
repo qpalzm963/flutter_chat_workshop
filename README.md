@@ -1,4 +1,4 @@
-# 第 6 堂：Cursor 歷史分頁 + 進房載入最新一頁
+# 第 6 堂：Cursor 歷史分頁 + 進房載入最新一頁（完成版）
 
 > 分支：`step-6-history-paging`（starter）／`step-6-history-paging-done`（完成版）
 > Server：ACK 等級；課前講師幫每個兩人組房間灌 300 則
