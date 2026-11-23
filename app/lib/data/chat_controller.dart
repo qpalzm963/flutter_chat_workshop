@@ -53,25 +53,13 @@ class ChatController {
     _flushOutbox();
   }
 
-  // TODO(課後挑戰) 重連時只抓最新一頁，不再從 cursor 一路補到底；跟本地接不上的地方就是洞
-
-  /// 本地是空的 → 抓最新一頁（第 6 堂）；不是空的 → 從 cursor 往後一頁頁補到底（Delta Sync）。
-  /// DB 不空時不能抓最新一頁：中間會出現 App 不知道的斷層。
+  /// 範圍表版本：重連只抓最新一頁。跟本地最新那一段接得上就自動合併；接不上就是洞，
+  /// 畫面只顯示最新那一段，等使用者滑到洞的上緣才補（見 [loadOlder]）。離線再久都只打一次 API。
   Future<void> _sync() async {
     try {
-      if (await store.latestSeq() == null) {
-        await store.upsertFromServer(await api.fetch());
-        return;
-      }
-      var cursor = await store.syncCursor(me) ?? 0;
-      while (true) {
-        final page = await api.fetch(afterSeq: cursor, limit: 100);
-        await store.upsertFromServer(page);
-        if (page.length < 100) break;
-        cursor = page.last.seq!;
-      }
+      await store.upsertFromServer(await api.fetch());
     } catch (_) {
-      // 補洞失敗不影響聊天，下次重連再補
+      // 拿不到就先看本地的，下次重連再抓
     }
   }
 
@@ -124,23 +112,23 @@ class ChatController {
     }
   }
 
-  // TODO(課後挑戰) 滑到最新那一段的邊緣（洞的上緣）才用 before_seq 補那一段，補完跟下面的區段合併
-
-  /// 快捲到頂時由 UI 呼叫。兩段式分頁：先擴大本地視窗，本地不夠才以最舊 seq 打 before_seq
+  /// 快捲到頂時由 UI 呼叫。兩段式分頁：
+  /// 1. 最新那一段本地還有沒顯示的 → 擴大視窗
+  /// 2. 到了這一段的下緣（洞的上緣）→ 用 before_seq 補下緣之前的一頁；補進來跟下面的區段相鄰就自動合併
   Future<void> loadOlder() async {
     if (loadingOlder.value || _noMoreHistory) return;
     loadingOlder.value = true;
     try {
-      if (await store.count() > limit.value) {
-        limit.value += HistoryApi.pageSize; // 第一段：本地還有，免打 API
+      if (await store.countVisible() > limit.value) {
+        limit.value += HistoryApi.pageSize;
         return;
       }
-      final oldest = await store.oldestSeq();
-      if (oldest == null || oldest <= 1) {
-        _noMoreHistory = true; // seq 從 1 開始連續：最舊就是 1
+      final floor = await store.visibleFloor();
+      if (floor == null || floor <= 1) {
+        _noMoreHistory = true; // seq 從 1 開始連續：最新那一段已經從 1 開始
         return;
       }
-      final page = await api.fetch(beforeSeq: oldest);
+      final page = await api.fetch(beforeSeq: floor);
       if (page.length < HistoryApi.pageSize) _noMoreHistory = true;
       await store.upsertFromServer(page);
       limit.value += page.length;

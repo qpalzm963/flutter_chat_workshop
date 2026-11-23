@@ -1,4 +1,4 @@
-# 第 7 堂課後挑戰：範圍表（Loaded Ranges）
+# 第 7 堂課後挑戰：範圍表（Loaded Ranges）（完成版）
 
 > 分支：`step-7-challenge-ranges`（starter，從第 7 堂完成版出發）／`step-7-challenge-ranges-done`（參考解）
 
