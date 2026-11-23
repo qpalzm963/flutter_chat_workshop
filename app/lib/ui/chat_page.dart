@@ -90,6 +90,7 @@ class _ChatPageState extends State<ChatPage> {
                       itemCount: list.length,
                       itemBuilder: (context, i) {
                         final m = list[i];
+                        // TODO(第 4 堂) 把 seq、status（只有自己的訊息）傳給氣泡；onRetry 呼叫 _chat.retry(m)
                         return MessageBubble(sender: m.sender, text: m.text, ts: m.ts, isMine: m.sender == widget.me);
                       },
                     );

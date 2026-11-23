@@ -31,12 +31,21 @@ class ChatController {
   }
 
   void _onEvent(Map<String, dynamic> json) {
+    // TODO(第 4 堂) ③ 收到 ack：用 client_msg_id 找到那一筆 → 改成 sent、填上 seq
     if (json['type'] != 'message') return;
     _list.insert(0, Message(sender: json['sender'] as String, text: json['text'] as String, ts: json['ts'] as int));
     _out.add(List.unmodifiable(_list));
   }
 
+  // TODO(第 4 堂) ② 樂觀更新：先插入一筆 sending 上螢幕，再送出 JSON（帶 client_msg_id，套件：uuid）
+  // TODO(第 4 堂) ④ 5 秒沒收到 ACK → failed
+  // TODO(第 4 堂) 列表排序以 seq 為準（還沒拿到 seq 的排最前面）
   void send(String text) => socket.send({'type': 'send', 'sender': me, 'text': text});
+
+  /// 點紅點重試
+  void retry(Message msg) {
+    // TODO(第 4 堂) ⑤ 重試
+  }
 
   void dispose() {
     _sub?.cancel();
