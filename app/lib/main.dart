@@ -79,6 +79,8 @@ class _NamePageState extends State<NamePage> {
   }
 }
 
+// TODO(第 8 堂) ② 開好 DB 之後建立 App 層級的 ChatService（..start()），改進房間列表 RoomListPage
+
 /// 先開好本地 DB，再進聊天頁
 class _Boot extends StatefulWidget {
   const _Boot({required this.user});

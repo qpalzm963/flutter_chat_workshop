@@ -5,6 +5,7 @@ import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/message.dart';
+import '../models/room.dart';
 
 /// SSOT（Single Source of Truth）：本地唯一的筆記本。
 /// - UI 只訂閱 [watchMessages]。
@@ -14,23 +15,42 @@ class LocalMessageStore {
 
   final Database _db;
   final _changes = StreamController<void>.broadcast();
+  final _roomChanges = StreamController<void>.broadcast();
+
+  /// DB 升版：每一版只寫「從上一版怎麼變過來」。新安裝依序跑完全部，舊版本只跑缺的。
+  /// 已經上線的版本內容永遠不改、不刪欄位，只往後加。
+  static final _migrations = <int, List<String>>{
+    // 第 5 堂：單一房間
+    1: [
+      '''CREATE TABLE messages(
+           client_msg_id TEXT PRIMARY KEY,
+           seq INTEGER,
+           sender TEXT NOT NULL,
+           text TEXT NOT NULL,
+           ts INTEGER NOT NULL,
+           status TEXT NOT NULL)''',
+      'CREATE INDEX idx_messages_seq ON messages(seq)',
+    ],
+    // TODO(第 8 堂) ① 加上第 2 版：messages 加 room_id（＋索引）、新增 rooms 表（欄位見 Room.toRow）。
+    //   舊訊息還不知道屬於哪個房間：先給一個預設值，等第一次拿到房間列表再歸到 assigned_room_id。
+    //   加了 2 之後版本號自動變成 2，已經是第 1 版的 DB 會跑 onUpgrade。
+  };
 
   /// 每個名字一個 DB 檔：同一台模擬器換名字登入不會混到別人的資料
   static Future<LocalMessageStore> open(String user) async {
+    Future<void> migrate(Database db, int from, int to) async {
+      for (var v = from + 1; v <= to; v++) {
+        for (final sql in _migrations[v]!) {
+          await db.execute(sql);
+        }
+      }
+    }
+
     final db = await openDatabase(
       join(await getDatabasesPath(), 'chat_$user.db'),
-      version: 1,
-      onCreate: (db, _) async {
-        await db.execute('''
-          CREATE TABLE messages(
-            client_msg_id TEXT PRIMARY KEY,
-            seq INTEGER,
-            sender TEXT NOT NULL,
-            text TEXT NOT NULL,
-            ts INTEGER NOT NULL,
-            status TEXT NOT NULL)''');
-        await db.execute('CREATE INDEX idx_messages_seq ON messages(seq)');
-      },
+      version: _migrations.length,
+      onCreate: (db, version) => migrate(db, 0, version),
+      onUpgrade: migrate, // 在同一個 transaction 裡：任何一步失敗就整個回滾，下次開啟再試
     );
     // 上次 App 被殺掉時還在 sending 的，不可能再收到 ACK 了 → 改成 failed
     await db.update(
@@ -41,6 +61,8 @@ class LocalMessageStore {
     );
     return LocalMessageStore._(db);
   }
+
+  // TODO(第 8 堂) ③ 下面的查詢、分頁、補洞都要加上房間條件（room_id）
 
   /// 本地查詢視窗：只撈最新 [limit] 則，最新在前（index 0），配合 reverse 列表。
   /// 還沒拿到 seq 的（自己剛送出的）排最前面。limit 變大或 DB 變動都會重新查詢。
@@ -147,4 +169,29 @@ class LocalMessageStore {
     );
     _changes.add(null);
   }
+
+  // ───────────────────────── 房間（第 8 堂） ─────────────────────────
+
+  /// 依最後一則訊息時間排序（有新訊息就置頂）
+  Stream<List<Room>> watchRooms() async* {
+    Future<List<Room>> query() async =>
+        (await _db.query('rooms', orderBy: 'last_ts IS NULL, last_ts DESC')).map(Room.fromRow).toList();
+    yield await query();
+    await for (final _ in _roomChanges.stream) {
+      yield await query();
+    }
+  }
+
+  Future<Room?> room(String id) async {
+    final rows = await _db.query('rooms', where: 'id = ?', whereArgs: [id]);
+    return rows.isEmpty ? null : Room.fromRow(rows.single);
+  }
+
+  /// 私聊還沒送出第一則前，Server 上還沒有這個房間：先在本地建一筆
+  Future<void> ensureRoom(Room room) async {
+    await _db.insert('rooms', room.toRow(), conflictAlgorithm: ConflictAlgorithm.ignore);
+    _roomChanges.add(null);
+  }
+
+  // TODO(第 8 堂) ④ upsertRooms（GET /rooms、room_added 寫進 rooms 表）、updatePreview（任何房間有新訊息就更新預覽）
 }

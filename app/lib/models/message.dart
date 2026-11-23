@@ -2,6 +2,7 @@ import 'message_status.dart';
 
 export 'message_status.dart';
 
+// TODO(第 8 堂) ③ 加上 roomId（Server 的訊息與 ACK 都帶 room_id）
 class Message {
   const Message({
     required this.clientMsgId,

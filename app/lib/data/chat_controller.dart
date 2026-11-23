@@ -10,6 +10,10 @@ import 'chat_socket.dart';
 import 'history_api.dart';
 import 'local_message_store.dart';
 
+// TODO(第 8 堂) ② 連線移到 App 層級的 ChatService：ChatController 改成每個房間一個（吃 service + roomId），
+//                只處理自己房間的 message（依 room_id 過濾）；送出時帶 room_id
+// TODO(第 8 堂) 重連時只對「開著的房間」補洞，其他房間點進去再補
+
 /// 單向資料流：
 ///   UI ──send()──▶ DB(sending) ──▶ WS
 ///   WS ──寫入──▶ DB ──Stream──▶ UI

@@ -1,34 +1,43 @@
-# 第 7 堂：斷線補洞（Delta Sync）+ 補送（完成版）
+# 第 8 堂：房間列表 + 多工
 
-> 分支：`step-7-delta-sync`（starter）／`step-7-delta-sync-done`（完成版）
-> Server：ACK 等級；固定兩兩一組
+> 分支：`step-8-rooms`（starter）／`step-8-rooms-done`（完成版）
+> Server：ACK 等級；開始可以自由分房、拉群
 
 ## 本堂目標
 
-客服：「出電梯之後，中間的訊息不見了。」「在捷運上傳的訊息沒有送出去。」
+PM：「要有私訊和群組。」營運：「活動時要能把使用者拉進同一個群。」
+
+架構轉折：連線從聊天頁提升到 App 層級（全 App 只有一條），每個房間的 `ChatController` 只從這條連線過濾出自己房間的訊息。
 
 ## 已經準備好的
 
-- `HistoryApi.fetch(afterSeq:)`
-- `LocalMessageStore` 的查詢工具
+- `models/room.dart`：`Room`、`Room.dmId(a, b)`
+- `ui/room_list_page.dart`：房間列表 UI、私聊選人
+- `data/chat_service.dart`：App 層級服務的骨架
+- `LocalMessageStore` 的升版骨架（`onUpgrade` 裡的 SQL 留了 TODO）
+- `HistoryApi.fetchRooms()`、`fetchOnlineUsers()`、`fetchMessages(roomId, …)`
 
-## 你要完成的（`TODO(第 7 堂)`）
+## 你要完成的（`TODO(第 8 堂)`）
 
-1. `ChatController` 監聽連線狀態：每次連上（包含 App 剛啟動）都觸發 2、3
-2. 補收：從本地的 cursor 用 `after_seq` 一頁一頁補進 DB，直到不足一頁
-3. 補送：DB 中所有還沒送達的（sending + failed），依建立時間、帶原本的 `clientMsgId` 重送，並重設 ACK 逾時
-4. 紅點的意思改成「目前還沒送達」，點擊立刻重送
+1. DB 升版：`messages` 加 `room_id` 和索引、新增 `rooms` 表、舊訊息歸到原本的兩人組房
+2. `ChatSocket` 移到 App 層級（`ChatService`）；`ChatController` 每房一個，依 `room_id` 分流；ACK 依 `clientMsgId` 對應
+3. 送出時帶 `room_id`；查詢、分頁、補洞都加上房間條件
+4. 房間列表：啟動時 `GET /rooms` 寫進 DB，UI 訂閱 DB；收到 `room_added` 就新增；其他房間有新訊息時更新預覽並置頂
+5. 私聊：`_open` 打開 `ChatPage(service, room)`（選人、算出 `dm:A:B`、本地建房都已經提供）
 
 ## 驗收清單
 
-- [ ] 輸入 `/drop`：斷線期間機器人說的 3 句，連回後自動補齊
-- [ ] 講師拒絕你連線 30 秒，期間送出 3 則：解除後自動送出，夥伴依序收到，不重複
-- [ ] 離線時送出訊息後殺掉 App，解除封鎖再打開，訊息仍然送得出去
-- [ ] 夥伴在你斷線期間傳的訊息，連回後全部出現
+- [ ] 講師一鍵把 3 人拉進群組：不用重開 App，列表立刻多一間
+- [ ] 群組裡有人發言：那一間跳到最上面，顯示最後一句
+- [ ] 開著兩人組時，群組的訊息不會跑進兩人組的畫面
+- [ ] 和夥伴私聊：雙方的列表都出現對方，第一句送得到
+- [ ] 直接從第 7 堂的 App 升上來：兩人組的舊訊息還在
+- [ ] 全 App 只有一條 WebSocket：進出好幾個房間，Server log 都沒有新的 `+ 你的名字`
 
-## 思考分享
+## 講師補充（先想想）
 
-- 離線三天，補洞要補幾千則怎麼辦？
+- DB 升版實務：版本號怎麼管？可以刪欄位嗎？升版失敗怎麼辦？
+- 為什麼不要一個房間開一條 WebSocket？
 
 ## 執行
 
