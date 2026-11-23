@@ -10,6 +10,8 @@ import 'local_message_store.dart';
 /// - 發送 / ACK / 逾時 / 補送（outbox）：ACK 只看 client_msg_id，跟哪個房間、房間有沒有開著無關
 /// - 房間列表：連上就重拉 GET /rooms；room_added 新增；任何房間的新訊息更新預覽
 /// 訊息本身由開著的那個房間的 ChatController 寫進 DB（沒開的房間只更新預覽，點進去再補洞）。
+// TODO(第 9 堂) ② 收到 {"type":"read"} 寫進 DB
+// TODO(第 9 堂) ① reportRead(roomId, seq)：只往前推，經 WS 回報 {"type":"read","room_id","seq"}
 class ChatService {
   ChatService({required this.me, required this.store, HistoryApi? api})
     : api = api ?? HistoryApi(),

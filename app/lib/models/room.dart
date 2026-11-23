@@ -8,6 +8,7 @@ class Room {
     this.lastSender,
     this.lastText,
     this.lastTs,
+    this.myReadSeq = 0,
   });
 
   final String id;
@@ -22,6 +23,11 @@ class Room {
   final String? lastSender;
   final String? lastText;
   final int? lastTs;
+
+  /// 我的已讀水位線
+  final int myReadSeq;
+
+  // TODO(第 9 堂) ③ 未讀數 = 房間最新 seq − 我的水位線（不能是負的）
 
   /// 私聊顯示對方名字
   String titleFor(String me) => kind == 'dm' ? members.firstWhere((m) => m != me, orElse: () => name) : name;
@@ -43,6 +49,7 @@ class Room {
       lastSender: last?['sender'] as String?,
       lastText: last?['text'] as String?,
       lastTs: last?['ts'] as int?,
+      myReadSeq: j['last_read_seq'] as int,
     );
   }
 
@@ -55,6 +62,7 @@ class Room {
     lastSender: r['last_sender'] as String?,
     lastText: r['last_text'] as String?,
     lastTs: r['last_ts'] as int?,
+    myReadSeq: r['my_read_seq'] as int,
   );
 
   Map<String, Object?> toRow() => {
@@ -66,5 +74,6 @@ class Room {
     'last_sender': lastSender,
     'last_text': lastText,
     'last_ts': lastTs,
+    'my_read_seq': myReadSeq,
   };
 }

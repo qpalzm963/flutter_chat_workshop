@@ -19,6 +19,9 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
+// TODO(第 9 堂) ① 用 SeqTracker（ui/seq_tracker.dart）包住氣泡，捲動時算出畫面上看得到的最大 seq
+// TODO(第 9 堂) ② 自己的訊息顯示「已讀」（私聊）／「已讀 N」（群組）：MessageBubble.readLabel
+// TODO(第 9 堂) ④ 進房定位第一則未讀（CustomScrollView 的 center key）＋ UnreadDivider ＋「跳到最新 ↓」
 class _ChatPageState extends State<ChatPage> {
   late final ChatController _chat;
   late final Stream<List<Message>> _messages;

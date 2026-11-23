@@ -1,43 +1,38 @@
-# 第 8 堂：房間列表 + 多工（完成版）
+# 第 9 堂：已讀 + 未讀
 
-> 分支：`step-8-rooms`（starter）／`step-8-rooms-done`（完成版）
-> Server：ACK 等級；開始可以自由分房、拉群
+> 分支：`step-9-read-receipts`（starter）／`step-9-read-receipts-done`（完成版）
+> Server：ACK 等級
 
 ## 本堂目標
 
-PM：「要有私訊和群組。」營運：「活動時要能把使用者拉進同一個群。」
-
-架構轉折：連線從聊天頁提升到 App 層級（全 App 只有一條），每個房間的 `ChatController` 只從這條連線過濾出自己房間的訊息。
+PM：「要有已讀。」追加：「群組要顯示幾人已讀。」「未讀 300 則時，要從第一則未讀開始看。」
 
 ## 已經準備好的
 
-- `models/room.dart`：`Room`、`Room.dmId(a, b)`
-- `ui/room_list_page.dart`：房間列表 UI、私聊選人
-- `data/chat_service.dart`：App 層級服務的骨架
-- `LocalMessageStore` 的升版骨架（`onUpgrade` 裡的 SQL 留了 TODO）
-- `HistoryApi.fetchRooms()`、`fetchOnlineUsers()`、`fetchMessages(roomId, …)`
+- DB v3：`reads` 表（每人每房的已讀位置）、`rooms.my_read_seq`
+- 氣泡的已讀標籤位置（`MessageBubble.readLabel`）
+- `ui/unread_divider.dart`：「以下為未讀訊息」分隔線
+- `ui/seq_tracker.dart`：把畫面上的氣泡登記到 `seq → BuildContext`
+- `LocalMessageStore` 的 `countFrom()`、`hasSeq()`：定位第一則未讀時用（TODO ④）
 
-## 你要完成的（`TODO(第 8 堂)`）
+## 你要完成的（`TODO(第 9 堂)`）
 
-1. DB 升版：`messages` 加 `room_id` 和索引、新增 `rooms` 表、舊訊息歸到原本的兩人組房
-2. `ChatSocket` 移到 App 層級（`ChatService`）；`ChatController` 每房一個，依 `room_id` 分流；ACK 依 `clientMsgId` 對應
-3. 送出時帶 `room_id`；查詢、分頁、補洞都加上房間條件
-4. 房間列表：啟動時 `GET /rooms` 寫進 DB，UI 訂閱 DB；收到 `room_added` 就新增；其他房間有新訊息時更新預覽並置頂
-5. 私聊：`_open` 打開 `ChatPage(service, room)`（選人、算出 `dm:A:B`、本地建房都已經提供）
+1. 捲動時算出畫面上看得到的最大 `seq`，Debounce 500ms 後經 WS 回報 `{"type":"read","room_id","seq"}`，只往前推
+2. 收到別人的已讀更新就寫進 DB；自己的訊息顯示「已讀」或「已讀 N」
+3. 房間列表顯示未讀數
+4. 進房時定位到第一則未讀（`center` key 錨點），加上「以下為未讀訊息」分隔線和「跳到最新 ↓」
 
 ## 驗收清單
 
-- [ ] 講師一鍵把 3 人拉進群組：不用重開 App，列表立刻多一間
-- [ ] 群組裡有人發言：那一間跳到最上面，顯示最後一句
-- [ ] 開著兩人組時，群組的訊息不會跑進兩人組的畫面
-- [ ] 和夥伴私聊：雙方的列表都出現對方，第一句送得到
-- [ ] 直接從第 7 堂的 App 升上來：兩人組的舊訊息還在
-- [ ] 全 App 只有一條 WebSocket：進出好幾個房間，Server log 都沒有新的 `+ 你的名字`
+- [ ] 捲動時，儀表板上你的已讀位置跟著往前走
+- [ ] 夥伴讀了，你的訊息顯示「已讀」；3 人群組顯示「已讀 2」
+- [ ] 講師把你的已讀位置設到第 50 則再灌 300 則：列表顯示未讀 300，進房停在分隔線
+- [ ] 只有真的出現在畫面上的訊息才算已讀
+- [ ] 新裝置第一次進房、第一則未讀不在本地時：停在底部，並提示上方還有幾則未讀
 
-## 講師補充（先想想）
+## 思考分享
 
-- DB 升版實務：版本號怎麼管？可以刪欄位嗎？升版失敗怎麼辦？
-- 為什麼不要一個房間開一條 WebSocket？
+- 千人群組的已讀，要推給幾個人？
 
 ## 執行
 

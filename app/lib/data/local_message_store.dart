@@ -16,6 +16,7 @@ class LocalMessageStore {
   final Database _db;
   final _messageChanges = StreamController<String?>.broadcast(); // 哪個房間變了（null = 不確定）
   final _roomChanges = StreamController<void>.broadcast();
+  final _readChanges = StreamController<String>.broadcast(); // 哪個房間的已讀位置變了
 
   /// DB 升版：每一版只寫「從上一版怎麼變過來」。新安裝依序跑完全部，舊版本只跑缺的。
   /// 已上線的版本內容永遠不改、不刪欄位，只往後加。
@@ -44,6 +45,15 @@ class LocalMessageStore {
            last_sender TEXT,
            last_text TEXT,
            last_ts INTEGER)''',
+    ],
+    // 第 9 堂：已讀水位線
+    3: [
+      'ALTER TABLE rooms ADD COLUMN my_read_seq INTEGER NOT NULL DEFAULT 0',
+      '''CREATE TABLE reads(
+           room_id TEXT NOT NULL,
+           user TEXT NOT NULL,
+           seq INTEGER NOT NULL,
+           PRIMARY KEY(room_id, user))''',
     ],
   };
 
@@ -171,6 +181,14 @@ class LocalMessageStore {
   Future<int> count(String roomId) async =>
       Sqflite.firstIntValue(await _db.rawQuery('SELECT COUNT(*) FROM messages WHERE room_id = ?', [roomId]))!;
 
+  /// 本地有幾則 seq >= [seq]（含還沒拿到 seq 的）→ 決定進房時視窗要開多大
+  Future<int> countFrom(String roomId, int seq) async => Sqflite.firstIntValue(
+    await _db.rawQuery('SELECT COUNT(*) FROM messages WHERE room_id = ? AND (seq IS NULL OR seq >= ?)', [roomId, seq]),
+  )!;
+
+  Future<bool> hasSeq(String roomId, int seq) async =>
+      (await _db.query('messages', where: 'room_id = ? AND seq = ?', whereArgs: [roomId, seq])).isNotEmpty;
+
   /// 本地最舊的 seq → 往上翻歷史的 cursor
   Future<int?> oldestSeq(String roomId) => _scalar('SELECT MIN(seq) FROM messages WHERE room_id = ?', [roomId]);
 
@@ -211,6 +229,7 @@ class LocalMessageStore {
   }
 
   /// GET /rooms 與 room_added：Server 說了算
+  // TODO(第 9 堂) ② 房間 JSON 裡的 reads（每個人的已讀位置）也要寫進 reads 表，並通知 _readChanges
   Future<void> upsertRooms(List<Map<String, dynamic>> json) async {
     final batch = _db.batch();
     for (final j in json) {
@@ -236,6 +255,23 @@ class LocalMessageStore {
     );
     if (n > 0) _roomChanges.add(null);
   }
+
+  // ───────────────────────── 已讀（第 9 堂） ─────────────────────────
+
+  /// 這個房間每個人讀到哪（user → seq）
+  Stream<Map<String, int>> watchReads(String roomId) async* {
+    Future<Map<String, int>> query() async => {
+      for (final r in await _db.query('reads', where: 'room_id = ?', whereArgs: [roomId]))
+        r['user'] as String: r['seq'] as int,
+    };
+    yield await query();
+    await for (final _ in _readChanges.stream.where((r) => r == roomId)) {
+      yield await query();
+    }
+  }
+
+  // TODO(第 9 堂) ② setRead：Server 推來的已讀事件寫進 reads；是我自己的就同時更新 rooms.my_read_seq
+  // TODO(第 9 堂) ① advanceMyRead：我的水位線只能前進
 
   Future<int?> _scalar(String sql, [List<Object?>? args]) async => Sqflite.firstIntValue(await _db.rawQuery(sql, args));
 }
