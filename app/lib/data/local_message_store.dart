@@ -6,6 +6,9 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/message.dart';
 
+// TODO(課後挑戰) 新增 loaded_ranges(start_seq, end_seq)：記錄本地「連續擁有」的區段；寫入 Server 訊息時一起合併區段
+// TODO(課後挑戰) watchMessages 只顯示最新那一段（還沒拿到 seq 的照樣顯示）
+
 /// SSOT（Single Source of Truth）：本地唯一的筆記本。
 /// - UI 只訂閱 [watchMessages]。
 /// - WebSocket 只負責「寫進來」，去重（client_msg_id 主鍵）與排序（seq）都交給 DB。

@@ -53,6 +53,8 @@ class ChatController {
     _flushOutbox();
   }
 
+  // TODO(課後挑戰) 重連時只抓最新一頁，不再從 cursor 一路補到底；跟本地接不上的地方就是洞
+
   /// 本地是空的 → 抓最新一頁（第 6 堂）；不是空的 → 從 cursor 往後一頁頁補到底（Delta Sync）。
   /// DB 不空時不能抓最新一頁：中間會出現 App 不知道的斷層。
   Future<void> _sync() async {
@@ -121,6 +123,8 @@ class ChatController {
         store.upsertFromServer([Message.fromServer(json)]);
     }
   }
+
+  // TODO(課後挑戰) 滑到最新那一段的邊緣（洞的上緣）才用 before_seq 補那一段，補完跟下面的區段合併
 
   /// 快捲到頂時由 UI 呼叫。兩段式分頁：先擴大本地視窗，本地不夠才以最舊 seq 打 before_seq
   Future<void> loadOlder() async {
