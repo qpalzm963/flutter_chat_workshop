@@ -41,7 +41,7 @@ class _ChatPageState extends State<ChatPage> {
   /// 新訊息進來時：在底部就自然出現；正在往上翻就只亮「有新訊息」，不把人拉走
   void _onNewList(List<Message> list) {
     final newest = list.isEmpty ? null : list.first;
-    if (newest == null || identical(newest, _newest)) return;
+    if (newest == null || newest.clientMsgId == _newest?.clientMsgId) return;
     final isFirstLoad = _newest == null;
     _newest = newest;
     if (isFirstLoad || newest.sender == widget.me || _isAtBottom) return;
@@ -90,8 +90,17 @@ class _ChatPageState extends State<ChatPage> {
                       itemCount: list.length,
                       itemBuilder: (context, i) {
                         final m = list[i];
-                        // TODO(第 4 堂) 把 seq、status（只有自己的訊息）傳給氣泡；onRetry 呼叫 _chat.retry(m)
-                        return MessageBubble(sender: m.sender, text: m.text, ts: m.ts, isMine: m.sender == widget.me);
+                        final isMine = m.sender == widget.me;
+                        return MessageBubble(
+                          key: ValueKey(m.clientMsgId),
+                          sender: m.sender,
+                          text: m.text,
+                          ts: m.ts,
+                          seq: m.seq,
+                          isMine: isMine,
+                          status: isMine ? m.status : null,
+                          onRetry: () => _chat.retry(m),
+                        );
                       },
                     );
                   },

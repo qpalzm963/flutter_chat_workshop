@@ -1,4 +1,4 @@
-# 第 4 堂：樂觀更新 + ACK + 冪等
+# 第 4 堂：樂觀更新 + ACK + 冪等（完成版）
 
 > 分支：`step-4-optimistic-ack`（starter）／`step-4-optimistic-ack-done`（完成版）
 > Server：講師切到「ACK」等級（不再回音給發送者，改回 ACK）
