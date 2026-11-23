@@ -7,6 +7,8 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/connection_status.dart';
 
+export '../models/connection_status.dart';
+
 /// WebSocket 通道：一通不掛斷的電話。
 /// 負責：連線、心跳偵測假死、Exponential Backoff + Jitter 重連。
 /// 不懂業務邏輯，只把 Server 事件（ack / message）往外丟。

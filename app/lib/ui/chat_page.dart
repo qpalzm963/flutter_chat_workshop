@@ -1,18 +1,19 @@
 import 'package:flutter/material.dart';
 
 import '../data/chat_controller.dart';
-import '../data/local_message_store.dart';
+import '../data/chat_service.dart';
 import '../models/message.dart';
+import '../models/room.dart';
 import 'chat_input.dart';
 import 'connection_banner.dart';
 import 'loading_older_indicator.dart';
 import 'message_bubble.dart';
 
 class ChatPage extends StatefulWidget {
-  const ChatPage({super.key, required this.me, required this.store});
+  const ChatPage({super.key, required this.service, required this.room});
 
-  final String me;
-  final LocalMessageStore store;
+  final ChatService service;
+  final Room room;
 
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -26,13 +27,15 @@ class _ChatPageState extends State<ChatPage> {
   Message? _newest;
   bool _hasUnseen = false;
 
+  String get _me => widget.service.me;
+
   /// reverse: true 時 offset 0 就是「最底部」
   bool get _isAtBottom => !_scroll.hasClients || _scroll.offset < 60;
 
   @override
   void initState() {
     super.initState();
-    _chat = ChatController(me: widget.me, store: widget.store)..connect();
+    _chat = ChatController(service: widget.service, roomId: widget.room.id)..open();
     _messages = _chat.messages;
     _scroll.addListener(_onScroll);
   }
@@ -49,7 +52,7 @@ class _ChatPageState extends State<ChatPage> {
     if (newest == null || newest.clientMsgId == _newest?.clientMsgId) return;
     final isFirstLoad = _newest == null;
     _newest = newest;
-    if (isFirstLoad || newest.sender == widget.me || _isAtBottom) return;
+    if (isFirstLoad || newest.sender == _me || _isAtBottom) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() => _hasUnseen = true);
     });
@@ -77,10 +80,10 @@ class _ChatPageState extends State<ChatPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('聊天室（${widget.me}）')),
+      appBar: AppBar(title: Text(widget.room.titleFor(_me))),
       body: Column(
         children: [
-          ConnectionBanner(status: _chat.status),
+          ConnectionBanner(status: widget.service.socket.status),
           Expanded(
             child: Stack(
               children: [
@@ -96,7 +99,7 @@ class _ChatPageState extends State<ChatPage> {
                       itemBuilder: (context, i) {
                         if (i == list.length) return LoadingOlderIndicator(loading: _chat.loadingOlder);
                         final m = list[i];
-                        final isMine = m.sender == widget.me;
+                        final isMine = m.sender == _me;
                         return MessageBubble(
                           key: ValueKey(m.clientMsgId),
                           sender: m.sender,

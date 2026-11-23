@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/chat_service.dart';
 import '../models/room.dart';
+import 'chat_page.dart';
 import 'connection_banner.dart';
 
 class RoomListPage extends StatefulWidget {
@@ -18,9 +19,11 @@ class _RoomListPageState extends State<RoomListPage> {
 
   String get _me => widget.service.me;
 
-  void _open(Room room) {
-    // TODO(第 8 堂) 打開這個房間的聊天頁：ChatPage 要改成吃 (service, room)
-  }
+  void _open(Room room) => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => ChatPage(service: widget.service, room: room),
+    ),
+  );
 
   /// 私聊：選線上學員 → 算出 dm:A:B → 先在本地建房，第一則送出時 Server 自動建房
   Future<void> _newDm() async {

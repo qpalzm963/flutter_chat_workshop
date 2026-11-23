@@ -1,4 +1,4 @@
-# 第 8 堂：房間列表 + 多工
+# 第 8 堂：房間列表 + 多工（完成版）
 
 > 分支：`step-8-rooms`（starter）／`step-8-rooms-done`（完成版）
 > Server：ACK 等級；開始可以自由分房、拉群

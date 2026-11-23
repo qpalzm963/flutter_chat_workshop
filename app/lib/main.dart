@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'config.dart';
+import 'data/chat_service.dart';
 import 'data/local_message_store.dart';
-import 'ui/chat_page.dart';
+import 'ui/room_list_page.dart';
 
 void main() {
   runApp(const ChatWorkshopApp());
@@ -79,9 +80,7 @@ class _NamePageState extends State<NamePage> {
   }
 }
 
-// TODO(第 8 堂) ② 開好 DB 之後建立 App 層級的 ChatService（..start()），改進房間列表 RoomListPage
-
-/// 先開好本地 DB，再進聊天頁
+/// 開 DB、建立 App 層級的唯一連線，然後進房間列表
 class _Boot extends StatefulWidget {
   const _Boot({required this.user});
 
@@ -92,20 +91,26 @@ class _Boot extends StatefulWidget {
 }
 
 class _BootState extends State<_Boot> {
-  LocalMessageStore? _store;
+  ChatService? _service;
 
   @override
   void initState() {
     super.initState();
     LocalMessageStore.open(widget.user).then((store) {
-      if (mounted) setState(() => _store = store);
+      if (mounted) setState(() => _service = ChatService(me: widget.user, store: store)..start());
     });
   }
 
   @override
+  void dispose() {
+    _service?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final store = _store;
-    if (store == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    return ChatPage(me: widget.user, store: store);
+    final service = _service;
+    if (service == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return RoomListPage(service: service);
   }
 }
