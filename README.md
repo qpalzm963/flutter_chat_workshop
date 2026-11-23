@@ -1,4 +1,4 @@
-# 第 5 堂：本地 DB（SSOT）
+# 第 5 堂：本地 DB（SSOT）（完成版）
 
 > 分支：`step-5-local-db`（starter）／`step-5-local-db-done`（完成版）
 > Server：ACK 等級；第 5～7 堂固定兩兩一組，不換房
