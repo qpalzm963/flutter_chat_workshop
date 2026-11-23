@@ -1,37 +1,37 @@
-# 第 1 堂：接通 + 收發（純字串 → JSON）（完成版）
+# 第 2 堂：心跳 + 自動重連（Backoff + Jitter）
 
-> 分支：`step-1-connect`（starter）／`step-1-connect-done`（完成版）
-> Server：講師先開「純字串」等級，升級 JSON 時切到「回音」等級（廣播包含自己）
+> 分支：`step-2-heartbeat`（starter）／`step-2-heartbeat-done`（完成版）
+> Server：回音等級
 
 ## 本堂目標
 
-PM：「先做一個能即時互傳的 MVP。」兩台模擬器在私人房裡互傳訊息。
+客服：「切背景回來就收不到訊息。」後端：「Server 一重啟，就被大家的重連打爆。」
 
 ## 已經準備好的
 
-- 聊天頁、氣泡、輸入框、連線橫幅（`StreamBuilder` 已經接好 `ChatController.messages`）
-- `ChatController` 的方法簽名
-- `config.dart` 的 `wsUrl(名字)`
+- 連線邏輯已經從 `ChatController` 拆到 `data/chat_socket.dart` 的 `ChatSocket`（連線、送出、事件串流都搬好了）
+- 連線橫幅已經接好 `ChatSocket.status`
 
-## 你要完成的（`TODO(第 1 堂)`）
+## 你要完成的（`TODO(第 2 堂)`）
 
-1. 在 `connect()` 連上 `wsUrl(me)`
-2. 先用 `sink.add` 送純字串；`listen` 收到什麼就顯示什麼
-3. 追加需求：「訊息要顯示是誰傳的」→ 升級成 JSON（`type` / `sender` / `text`），收到後解析
-4. `dispose()` 收尾
+1. 每 10 秒送一次 ping；5 秒內沒收到 pong 就主動斷線
+2. `onDone` / `onError` 時排程重連：1s → 2s → 4s …，上限 30s，再加上隨機毫秒
+3. 連上之後重置重試次數
+4. 對外發出連線狀態（連線中 / 已連線 / 已斷線）
+5. `dispose()` 時清掉所有 Timer
+
+> 課堂用 10 秒 ping、5 秒逾時，方便觀察。正式環境通常是 25～30 秒。
 
 ## 驗收清單
 
-- [ ] 私人房兩台模擬器互傳，對方馬上看到
-- [ ] 每則訊息都有寫是誰傳的
-- [ ] 收到的 JSON 會看 `type`，不是 `message` 的不會被當成聊天訊息
-- [ ] 按左上角返回離開聊天頁後，講師儀表板上你變成「離線」，Server log 出現 `- 你的名字`
-- [ ] 最後全班切到大廳，大家互傳
+- [ ] 對自己下 `/zombie`，20 秒內自動連回來
+- [ ] 斷線時橫幅會顯示，連回來後橫幅消失
+- [ ] 講師下 `/drop @all`，儀表板的重連時間軸上，大家是錯開的
+- [ ] 按左上角返回離開聊天頁之後，Server log 不會再出現你的重連紀錄
 
 ## 講師補充（先想想）
 
-- WebSocket 怎麼帶登入身分？
-- 為什麼正式環境要用 `wss://`？
+- App 切到背景或被殺掉之後，要怎麼收到訊息？
 
 ## 執行
 
