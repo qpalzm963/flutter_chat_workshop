@@ -1,4 +1,4 @@
-# 第 2 堂：心跳 + 自動重連（Backoff + Jitter）
+# 第 2 堂：心跳 + 自動重連（Backoff + Jitter）（完成版）
 
 > 分支：`step-2-heartbeat`（starter）／`step-2-heartbeat-done`（完成版）
 > Server：回音等級
