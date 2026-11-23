@@ -86,6 +86,18 @@ class LocalMessageStore {
     return rows.map(Message.fromRow).toList();
   }
 
+  /// 斷線補洞的 cursor：「別人的」最新 seq。
+  /// 不能用 MAX(seq)：重連時補送的 ACK 可能比補洞先回來，自己的新 seq 會讓 cursor 跳過中間漏掉的訊息。
+  /// 本地只有自己的訊息時，退回到最舊那則之前。
+  Future<int?> syncCursor(String me) async => Sqflite.firstIntValue(
+    await _db.rawQuery(
+      'SELECT COALESCE('
+      '(SELECT MAX(seq) FROM messages WHERE sender != ?), '
+      '(SELECT MIN(seq) - 1 FROM messages))',
+      [me],
+    ),
+  );
+
   /// 本地最新的 seq（null = 本地還沒有任何 Server 的訊息）
   Future<int?> latestSeq() async => Sqflite.firstIntValue(await _db.rawQuery('SELECT MAX(seq) FROM messages'));
 

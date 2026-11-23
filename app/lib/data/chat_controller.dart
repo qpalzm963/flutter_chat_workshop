@@ -46,22 +46,37 @@ class ChatController {
     socket.connect();
   }
 
-  // TODO(第 7 堂) ① 每次連上（包含 App 剛啟動）都要：補收（②）＋補送（③）
+  /// 每次連上（包含 App 剛啟動）：補收 + 補送
   void _onStatusChanged() {
-    if (socket.status.value == ConnectionStatus.connected) _loadLatestIfEmpty();
+    if (socket.status.value != ConnectionStatus.connected) return;
+    _sync();
+    _flushOutbox();
   }
 
-  // TODO(第 7 堂) ② 補收：本地不是空的 → 從 cursor 用 after_seq 一頁一頁補進 DB，直到不足一頁
-  // TODO(第 7 堂) ③ 補送：store.unsent() 依建立時間、帶原本的 clientMsgId 重送，並重設 ACK 逾時
-
-  /// 本地是空的（例如換新手機）→ 抓最新一頁。
-  /// 本地不是空的就不能抓：最新一頁跟本地最新那則之間可能有 App 不知道的斷層（第 7 堂處理）。
-  Future<void> _loadLatestIfEmpty() async {
+  /// 本地是空的 → 抓最新一頁（第 6 堂）；不是空的 → 從 cursor 往後一頁頁補到底（Delta Sync）。
+  /// DB 不空時不能抓最新一頁：中間會出現 App 不知道的斷層。
+  Future<void> _sync() async {
     try {
-      if (await store.latestSeq() != null) return;
-      await store.upsertFromServer(await api.fetch());
+      if (await store.latestSeq() == null) {
+        await store.upsertFromServer(await api.fetch());
+        return;
+      }
+      var cursor = await store.syncCursor(me) ?? 0;
+      while (true) {
+        final page = await api.fetch(afterSeq: cursor, limit: 100);
+        await store.upsertFromServer(page);
+        if (page.length < 100) break;
+        cursor = page.last.seq!;
+      }
     } catch (_) {
-      // 拿不到就先看本地的，下次連上再試
+      // 補洞失敗不影響聊天，下次重連再補
+    }
+  }
+
+  /// Outbox：sending 與 failed 都補送，依建立時間、帶原本的 clientMsgId（冪等，不怕重複）
+  Future<void> _flushOutbox() async {
+    for (final m in await store.unsent()) {
+      await retry(m);
     }
   }
 

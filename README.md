@@ -1,4 +1,4 @@
-# 第 7 堂：斷線補洞（Delta Sync）+ 補送
+# 第 7 堂：斷線補洞（Delta Sync）+ 補送（完成版）
 
 > 分支：`step-7-delta-sync`（starter）／`step-7-delta-sync-done`（完成版）
 > Server：ACK 等級；固定兩兩一組
