@@ -30,9 +30,13 @@ class ChatController {
   final _uuid = const Uuid();
   StreamSubscription<Map<String, dynamic>>? _sub;
 
+  // TODO(第 6 堂) 準備 HistoryApi(me)、本地視窗大小 limit（ValueNotifier，預設一頁 50 則）、載入中旗標
+
   /// 訊息列表，最新在前：直接訂閱 DB
+  // TODO(第 6 堂) ② 改成只看本地最新的 limit 則
   Stream<List<Message>> get messages => store.watchMessages();
 
+  // TODO(第 6 堂) ① 進房（連上）時本地 DB 是空的 → 抓最新一頁寫進 DB；不是空的就不要抓
   void connect() {
     _sub = socket.events.listen(_onEvent);
     socket.connect();
@@ -78,6 +82,12 @@ class ChatController {
       case 'message':
         store.upsertFromServer([Message.fromServer(json)]);
     }
+  }
+
+  /// 快捲到頂時由 UI 呼叫
+  Future<void> loadOlder() async {
+    // TODO(第 6 堂) ③ 兩段式分頁：先擴大本地視窗；本地不夠才用最舊的 seq 打 before_seq，結果寫進 DB
+    // TODO(第 6 堂) ④ 載入中不要重複打；判斷「沒有更早的訊息了」
   }
 
   void dispose() {

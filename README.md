@@ -1,35 +1,37 @@
-# 第 5 堂：本地 DB（SSOT）（完成版）
+# 第 6 堂：Cursor 歷史分頁 + 進房載入最新一頁
 
-> 分支：`step-5-local-db`（starter）／`step-5-local-db-done`（完成版）
-> Server：ACK 等級；第 5～7 堂固定兩兩一組，不換房
+> 分支：`step-6-history-paging`（starter）／`step-6-history-paging-done`（完成版）
+> Server：ACK 等級；課前講師幫每個兩人組房間灌 300 則
 
 ## 本堂目標
 
-客服：「關掉 App 重開，聊天紀錄全不見了。」
+PM：「換新手機就看不到以前的對話了。」追加：「我想往上滑看昨天的訊息。」
 
 ## 已經準備好的
 
-- `data/local_message_store.dart`：資料表、`watchMessages()` 查詢、`Message` 與資料列的轉換
-- 每個名字一個 DB 檔（`chat_<名字>.db`）
+- `data/history_api.dart`：`fetch(beforeSeq: / afterSeq: / limit:)`，回傳依 `seq` 由小到大
+- `ui/loading_older_indicator.dart`：列表頂端的載入中轉圈
+- `LocalMessageStore` 的 `latestSeq()`／`oldestSeq()`／`count()`：本地最新、最舊的 `seq` 和總筆數
+- 每頁 50 則（`HistoryApi.pageSize`）
 
-## 你要完成的（`TODO(第 5 堂)`）
+## 你要完成的（`TODO(第 6 堂)`）
 
-1. `ChatController` 的記憶體 List 換成 `LocalMessageStore`
-2. 寫 upsert（`INSERT … ON CONFLICT(client_msg_id) DO UPDATE`）和「資料變了」的通知
-3. 送出時寫一筆 sending、收到 ACK 時更新、收到廣播時 upsert
-4. `messages` 改成訂閱 DB（UI 不用改）
-5. 啟動時，殘留的 sending 改成 failed
+1. 進房時本地 DB 是空的 → 抓最新一頁寫進 DB
+2. `watchMessages` 加上 `limit`：UI 只看本地最新的一段
+3. 快捲到頂時用兩段式分頁：先把本地視窗開大，本地不夠才用最舊的 `seq` 呼叫 `before_seq`，結果寫進 DB
+4. 載入中旗標，以及「沒有更早的訊息了」的判斷
 
 ## 驗收清單
 
-- [ ] 殺掉 App 重開，訊息立刻出現，不會白屏
-- [ ] 講師暫時拒絕你的連線時重開 App：仍然看得到所有訊息，也看得到斷線橫幅
-- [ ] 送到一半就殺掉 App，重開後那則變成紅點
-- [ ] 同一則訊息不會因為重複寫入而出現兩次
+- [ ] 刪掉 App 重裝（模擬換新手機），進房看到最新一頁
+- [ ] 一路往上滑：無縫載入，不會重複，畫面不會跳
+- [ ] 滑到最舊的訊息後，不會再打 API
+- [ ] 本地 DB 不是空的時候，進房不會去抓最新一頁
 
 ## 思考分享
 
-- 千人群組每秒湧入 30 則訊息，畫面卡死了怎麼辦？
+- 點擊一則回覆，要怎麼跳到三天前的那則原訊息？
+- 本地 DB 無限長大怎麼辦？
 
 ## 執行
 

@@ -43,6 +43,7 @@ class LocalMessageStore {
 
   /// 最新在前（index 0），配合 ListView(reverse: true)。還沒拿到 seq 的排最前面。
   /// 先查一次，之後每收到一次「資料變了」的通知就重查。
+  // TODO(第 6 堂) ② 加上 limit：只撈最新 N 則（limit 變大時也要重新查詢）
   Stream<List<Message>> watchMessages() async* {
     yield await _queryAll();
     await for (final _ in _changes.stream) {
@@ -54,6 +55,14 @@ class LocalMessageStore {
     final rows = await _db.rawQuery('SELECT * FROM messages ORDER BY seq IS NULL DESC, seq DESC, ts DESC');
     return rows.map(Message.fromRow).toList();
   }
+
+  Future<int> count() async => Sqflite.firstIntValue(await _db.rawQuery('SELECT COUNT(*) FROM messages'))!;
+
+  /// 本地最舊的 seq → 往上翻歷史的 cursor
+  Future<int?> oldestSeq() async => Sqflite.firstIntValue(await _db.rawQuery('SELECT MIN(seq) FROM messages'));
+
+  /// 本地最新的 seq（null = 本地還沒有任何 Server 的訊息）
+  Future<int?> latestSeq() async => Sqflite.firstIntValue(await _db.rawQuery('SELECT MAX(seq) FROM messages'));
 
   /// 樂觀更新：先寫一筆 sending
   Future<void> insertPending(Message m) async {
