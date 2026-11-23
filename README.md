@@ -1,4 +1,4 @@
-# 第 3 堂：反轉列表 UI（Bottom-anchored）
+# 第 3 堂：反轉列表 UI（Bottom-anchored）（完成版）
 
 > 分支：`step-3-reverse-list`（starter）／`step-3-reverse-list-done`（完成版）
 > Server：回音等級

@@ -20,21 +20,46 @@ class _ChatPageState extends State<ChatPage> {
   late final Stream<List<Message>> _messages;
   final _scroll = ScrollController();
 
+  Message? _newest;
+  bool _hasUnseen = false;
+
+  /// reverse: true 時 offset 0 就是「最底部」
+  bool get _isAtBottom => !_scroll.hasClients || _scroll.offset < 60;
+
   @override
   void initState() {
     super.initState();
     _chat = ChatController(me: widget.me)..connect();
     _messages = _chat.messages;
+    _scroll.addListener(_onScroll);
   }
 
-  // TODO(第 3 堂) ① 改用 ListView.builder(reverse: true)：index 0 在最底，就不用反轉、也不用每次跳到底
-  // TODO(第 3 堂) ② 用 _scroll 判斷目前是不是在最底部
-  // TODO(第 3 堂) ③ 往上翻時有新訊息：不要拉回去，改顯示「有新訊息 ↓」提示（元件自己寫）
-  // TODO(第 3 堂) ④ 點提示或自己送出時，捲回最底部
+  void _onScroll() {
+    if (_hasUnseen && _isAtBottom) setState(() => _hasUnseen = false);
+  }
 
-  /// 一般列表：最新的在最下面，所以每次有新資料就跳到底（進房會閃一下的原因）
-  void _jumpToBottom() {
-    if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
+  /// 新訊息進來時：在底部就自然出現；正在往上翻就只亮「有新訊息」，不把人拉走
+  void _onNewList(List<Message> list) {
+    final newest = list.isEmpty ? null : list.first;
+    if (newest == null || identical(newest, _newest)) return;
+    final isFirstLoad = _newest == null;
+    _newest = newest;
+    if (isFirstLoad || newest.sender == widget.me || _isAtBottom) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _hasUnseen = true);
+    });
+  }
+
+  void _scrollToBottom() {
+    if (_scroll.hasClients) {
+      _scroll.animateTo(0, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+    }
+    setState(() => _hasUnseen = false);
+  }
+
+  void _send(String text) {
+    _chat.send(text);
+    _scrollToBottom();
   }
 
   @override
@@ -52,24 +77,41 @@ class _ChatPageState extends State<ChatPage> {
         children: [
           ConnectionBanner(status: _chat.status),
           Expanded(
-            child: StreamBuilder<List<Message>>(
-              stream: _messages,
-              builder: (context, snap) {
-                // Controller 給的是「最新在前」，一般 ListView 從上往下畫，所以要反過來
-                final list = (snap.data ?? const <Message>[]).reversed.toList();
-                WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
-                return ListView.builder(
-                  controller: _scroll,
-                  itemCount: list.length,
-                  itemBuilder: (context, i) {
-                    final m = list[i];
-                    return MessageBubble(sender: m.sender, text: m.text, ts: m.ts, isMine: m.sender == widget.me);
+            child: Stack(
+              children: [
+                StreamBuilder<List<Message>>(
+                  stream: _messages,
+                  builder: (context, snap) {
+                    final list = snap.data ?? const <Message>[]; // 最新在前，直接畫
+                    _onNewList(list);
+                    return ListView.builder(
+                      controller: _scroll,
+                      reverse: true, // Bottom-anchored：index 0 = 最新 = 最底
+                      itemCount: list.length,
+                      itemBuilder: (context, i) {
+                        final m = list[i];
+                        return MessageBubble(sender: m.sender, text: m.text, ts: m.ts, isMine: m.sender == widget.me);
+                      },
+                    );
                   },
-                );
-              },
+                ),
+                if (_hasUnseen)
+                  Positioned(
+                    bottom: 12,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: ActionChip(
+                        avatar: const Icon(Icons.arrow_downward, size: 16),
+                        label: const Text('有新訊息'),
+                        onPressed: _scrollToBottom,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
-          ChatInput(onSend: _chat.send),
+          ChatInput(onSend: _send),
         ],
       ),
     );
