@@ -1,37 +1,34 @@
-# 第 6 堂：Cursor 歷史分頁 + 進房載入最新一頁（完成版）
+# 第 7 堂：斷線補洞（Delta Sync）+ 補送
 
-> 分支：`step-6-history-paging`（starter）／`step-6-history-paging-done`（完成版）
-> Server：ACK 等級；課前講師幫每個兩人組房間灌 300 則
+> 分支：`step-7-delta-sync`（starter）／`step-7-delta-sync-done`（完成版）
+> Server：ACK 等級；固定兩兩一組
 
 ## 本堂目標
 
-PM：「換新手機就看不到以前的對話了。」追加：「我想往上滑看昨天的訊息。」
+客服：「出電梯之後，中間的訊息不見了。」「在捷運上傳的訊息沒有送出去。」
 
 ## 已經準備好的
 
-- `data/history_api.dart`：`fetch(beforeSeq: / afterSeq: / limit:)`，回傳依 `seq` 由小到大
-- `ui/loading_older_indicator.dart`：列表頂端的載入中轉圈
-- `LocalMessageStore` 的 `latestSeq()`／`oldestSeq()`／`count()`：本地最新、最舊的 `seq` 和總筆數
-- 每頁 50 則（`HistoryApi.pageSize`）
+- `HistoryApi.fetch(afterSeq:)`
+- `LocalMessageStore` 的查詢工具
 
-## 你要完成的（`TODO(第 6 堂)`）
+## 你要完成的（`TODO(第 7 堂)`）
 
-1. 進房時本地 DB 是空的 → 抓最新一頁寫進 DB
-2. `watchMessages` 加上 `limit`：UI 只看本地最新的一段
-3. 快捲到頂時用兩段式分頁：先把本地視窗開大，本地不夠才用最舊的 `seq` 呼叫 `before_seq`，結果寫進 DB
-4. 載入中旗標，以及「沒有更早的訊息了」的判斷
+1. `ChatController` 監聽連線狀態：每次連上（包含 App 剛啟動）都觸發 2、3
+2. 補收：從本地的 cursor 用 `after_seq` 一頁一頁補進 DB，直到不足一頁
+3. 補送：DB 中所有還沒送達的（sending + failed），依建立時間、帶原本的 `clientMsgId` 重送，並重設 ACK 逾時
+4. 紅點的意思改成「目前還沒送達」，點擊立刻重送
 
 ## 驗收清單
 
-- [ ] 刪掉 App 重裝（模擬換新手機），進房看到最新一頁
-- [ ] 一路往上滑：無縫載入，不會重複，畫面不會跳
-- [ ] 滑到最舊的訊息後，不會再打 API
-- [ ] 本地 DB 不是空的時候，進房不會去抓最新一頁
+- [ ] 輸入 `/drop`：斷線期間機器人說的 3 句，連回後自動補齊
+- [ ] 講師拒絕你連線 30 秒，期間送出 3 則：解除後自動送出，夥伴依序收到，不重複
+- [ ] 離線時送出訊息後殺掉 App，解除封鎖再打開，訊息仍然送得出去
+- [ ] 夥伴在你斷線期間傳的訊息，連回後全部出現
 
 ## 思考分享
 
-- 點擊一則回覆，要怎麼跳到三天前的那則原訊息？
-- 本地 DB 無限長大怎麼辦？
+- 離線三天，補洞要補幾千則怎麼辦？
 
 ## 執行
 

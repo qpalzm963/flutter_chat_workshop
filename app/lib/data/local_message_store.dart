@@ -75,6 +75,17 @@ class LocalMessageStore {
   /// 本地最舊的 seq → 往上翻歷史的 cursor
   Future<int?> oldestSeq() async => Sqflite.firstIntValue(await _db.rawQuery('SELECT MIN(seq) FROM messages'));
 
+  /// Outbox：所有還沒送達的（sending + failed），依建立時間排序
+  Future<List<Message>> unsent() async {
+    final rows = await _db.query(
+      'messages',
+      where: 'status != ?',
+      whereArgs: [MessageStatus.sent.name],
+      orderBy: 'ts ASC',
+    );
+    return rows.map(Message.fromRow).toList();
+  }
+
   /// 本地最新的 seq（null = 本地還沒有任何 Server 的訊息）
   Future<int?> latestSeq() async => Sqflite.firstIntValue(await _db.rawQuery('SELECT MAX(seq) FROM messages'));
 
