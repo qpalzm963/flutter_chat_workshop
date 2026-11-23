@@ -1,41 +1,37 @@
-# Flutter 即時聊天室工作坊：專案骨架
+# 第 1 堂：接通 + 收發（純字串 → JSON）
 
-> 分支：`step-0-starter`
+> 分支：`step-1-connect`（starter）／`step-1-connect-done`（完成版）
+> Server：講師先開「純字串」等級，升級 JSON 時切到「回音」等級（廣播包含自己）
 
-10 堂課，從一條 WebSocket 寫到有房間列表、離線補收補送、已讀未讀的聊天 App。每堂兩個分支：
+## 本堂目標
 
-- `step-N-主題`：上課的起點（starter），要寫的地方標了 `TODO(第 N 堂)`
-- `step-N-主題-done`：該堂完成版，跟不上時可以切過去接著上下一堂
+PM：「先做一個能即時互傳的 MVP。」兩台模擬器在私人房裡互傳訊息。
 
-| 堂 | 分支 |
-| :--- | :--- |
-| 1 | `step-1-connect`：接通 + 收發（純字串 → JSON） |
-| 2 | `step-2-heartbeat`：心跳 + 自動重連 |
-| 3 | `step-3-reverse-list`：反轉列表 UI |
-| 4 | `step-4-optimistic-ack`：樂觀更新 + ACK + 冪等 |
-| 5 | `step-5-local-db`：本地 DB（SSOT） |
-| 6 | `step-6-history-paging`：Cursor 歷史分頁 + 進房載入最新一頁 |
-| 7 | `step-7-delta-sync`：斷線補洞 + 補送（課後挑戰：`step-7-challenge-ranges`） |
-| 8 | `step-8-rooms`：房間列表 + 多工 |
-| 9 | `step-9-read-receipts`：已讀 + 未讀 |
+## 已經準備好的
 
-## 骨架裡已經有的
+- 聊天頁、氣泡、輸入框、連線橫幅（`StreamBuilder` 已經接好 `ChatController.messages`）
+- `ChatController` 的方法簽名
+- `config.dart` 的 `wsUrl(名字)`
 
-```
-app/lib/
-  config.dart                 Server 位址、wsUrl(名字)
-  models/message.dart         最小的 Message（sender / text / ts）
-  models/connection_status.dart
-  models/message_status.dart  sending / sent / failed（第 4 堂才會用到）
-  data/chat_controller.dart   只有方法簽名的 ChatController
-  ui/chat_page.dart           聊天頁：StreamBuilder 已經接好 ChatController.messages
-  ui/message_bubble.dart      氣泡（含狀態圖示、已讀標籤位置）
-  ui/chat_input.dart          輸入框
-  ui/connection_banner.dart   連線橫幅
-server/                       全班共用的 Server + 講師儀表板
-```
+## 你要完成的（`TODO(第 1 堂)`）
 
-骨架可以直接跑：會看到聊天頁，但還連不上、送不出去。
+1. 在 `connect()` 連上 `wsUrl(me)`
+2. 先用 `sink.add` 送純字串；`listen` 收到什麼就顯示什麼
+3. 追加需求：「訊息要顯示是誰傳的」→ 升級成 JSON（`type` / `sender` / `text`），收到後解析
+4. `dispose()` 收尾
+
+## 驗收清單
+
+- [ ] 私人房兩台模擬器互傳，對方馬上看到
+- [ ] 每則訊息都有寫是誰傳的
+- [ ] 收到的 JSON 會看 `type`，不是 `message` 的不會被當成聊天訊息
+- [ ] 按左上角返回離開聊天頁後，講師儀表板上你變成「離線」，Server log 出現 `- 你的名字`
+- [ ] 最後全班切到大廳，大家互傳
+
+## 講師補充（先想想）
+
+- WebSocket 怎麼帶登入身分？
+- 為什麼正式環境要用 `wss://`？
 
 ## 執行
 
