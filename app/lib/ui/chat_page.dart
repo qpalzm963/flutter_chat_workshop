@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 
 import '../data/chat_controller.dart';
+import '../data/local_message_store.dart';
 import '../models/message.dart';
 import 'chat_input.dart';
 import 'connection_banner.dart';
 import 'message_bubble.dart';
 
 class ChatPage extends StatefulWidget {
-  const ChatPage({super.key, required this.me});
+  const ChatPage({super.key, required this.me, required this.store});
 
   final String me;
+  final LocalMessageStore store;
 
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -29,7 +31,7 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
-    _chat = ChatController(me: widget.me)..connect();
+    _chat = ChatController(me: widget.me, store: widget.store)..connect();
     _messages = _chat.messages;
     _scroll.addListener(_onScroll);
   }

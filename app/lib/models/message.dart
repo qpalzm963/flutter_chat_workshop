@@ -41,4 +41,22 @@ class Message {
     ts: json['ts'] as int,
     status: MessageStatus.sent,
   );
+
+  factory Message.fromRow(Map<String, Object?> row) => Message(
+    clientMsgId: row['client_msg_id'] as String,
+    seq: row['seq'] as int?,
+    sender: row['sender'] as String,
+    text: row['text'] as String,
+    ts: row['ts'] as int,
+    status: MessageStatus.values.byName(row['status'] as String),
+  );
+
+  Map<String, Object?> toRow() => {
+    'client_msg_id': clientMsgId,
+    'seq': seq,
+    'sender': sender,
+    'text': text,
+    'ts': ts,
+    'status': status.name,
+  };
 }

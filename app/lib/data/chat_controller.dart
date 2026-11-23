@@ -7,14 +7,20 @@ import '../config.dart';
 import '../models/connection_status.dart';
 import '../models/message.dart';
 import 'chat_socket.dart';
+import 'local_message_store.dart';
 
 /// 聊天室的大腦：UI 只跟它說話。連線細節交給 [ChatSocket]。
 class ChatController {
-  ChatController({required this.me}) : socket = ChatSocket(wsUrl(me));
+  ChatController({required this.me, required this.store}) : socket = ChatSocket(wsUrl(me));
 
   /// 我的名字（也是連線身分）
   final String me;
   final ChatSocket socket;
+
+  /// 本地 DB（SSOT）。
+  // TODO(第 5 堂) ① 把下面的記憶體 _list 換成 store：送出寫 sending、ACK 更新、廣播 upsert
+  // TODO(第 5 堂) ④ messages 改成訂閱 store.watchMessages()（UI 不用改）
+  final LocalMessageStore store;
 
   /// 連線狀態：直接用 socket 的（連線橫幅已經接好）
   ValueNotifier<ConnectionStatus> get status => socket.status;

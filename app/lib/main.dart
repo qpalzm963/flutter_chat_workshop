@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'config.dart';
+import 'data/local_message_store.dart';
 import 'ui/chat_page.dart';
 
 void main() {
@@ -42,7 +43,7 @@ class _NamePageState extends State<NamePage> {
     final name = _name.text.trim();
     if (name.isEmpty) return;
     // 用 push 而不是 pushReplacement：聊天頁要能返回，才驗得到離開時有沒有收乾淨
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => ChatPage(me: name)));
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => _Boot(user: name)));
   }
 
   @override
@@ -75,5 +76,34 @@ class _NamePageState extends State<NamePage> {
         ),
       ),
     );
+  }
+}
+
+/// 先開好本地 DB，再進聊天頁
+class _Boot extends StatefulWidget {
+  const _Boot({required this.user});
+
+  final String user;
+
+  @override
+  State<_Boot> createState() => _BootState();
+}
+
+class _BootState extends State<_Boot> {
+  LocalMessageStore? _store;
+
+  @override
+  void initState() {
+    super.initState();
+    LocalMessageStore.open(widget.user).then((store) {
+      if (mounted) setState(() => _store = store);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = _store;
+    if (store == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return ChatPage(me: widget.user, store: store);
   }
 }

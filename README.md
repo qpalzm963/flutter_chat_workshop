@@ -1,37 +1,35 @@
-# 第 4 堂：樂觀更新 + ACK + 冪等（完成版）
+# 第 5 堂：本地 DB（SSOT）
 
-> 分支：`step-4-optimistic-ack`（starter）／`step-4-optimistic-ack-done`（完成版）
-> Server：講師切到「ACK」等級（不再回音給發送者，改回 ACK）
+> 分支：`step-5-local-db`（starter）／`step-5-local-db-done`（完成版）
+> Server：ACK 等級；第 5～7 堂固定兩兩一組，不換房
 
 ## 本堂目標
 
-PM：「網路慢的時候，按送出要等很久才看得到。」QA：「對方收到兩則一模一樣的訊息。」
+客服：「關掉 App 重開，聊天紀錄全不見了。」
 
 ## 已經準備好的
 
-- `models/message_status.dart`：`sending` / `sent` / `failed`
-- 氣泡已經有三種狀態圖示，只要把 `status` 傳進去；紅點點擊會呼叫 `onRetry`
+- `data/local_message_store.dart`：資料表、`watchMessages()` 查詢、`Message` 與資料列的轉換
+- 每個名字一個 DB 檔（`chat_<名字>.db`）
 
-## 你要完成的（`TODO(第 4 堂)`）
+## 你要完成的（`TODO(第 5 堂)`）
 
-1. `Message` 加上 `clientMsgId` / `status` / `seq`
-2. 送出時先插入一筆 sending 上螢幕，再送出 JSON（帶 `client_msg_id`）
-3. 收到 `ack`：用 `client_msg_id` 找到那一筆 → 改成 sent，填上 `seq`
-4. 5 秒沒收到 ACK → failed
-5. 點紅點重試
-6. 翻車現場：`/fail` 之後重試，夥伴看到兩則一樣的訊息 → 找出原因並修正
+1. `ChatController` 的記憶體 List 換成 `LocalMessageStore`
+2. 寫 upsert（`INSERT … ON CONFLICT(client_msg_id) DO UPDATE`）和「資料變了」的通知
+3. 送出時寫一筆 sending、收到 ACK 時更新、收到廣播時 upsert
+4. `messages` 改成訂閱 DB（UI 不用改）
+5. 啟動時，殘留的 sending 改成 failed
 
 ## 驗收清單
 
-- [ ] 講師開全域延遲，或輸入 `/delay`：訊息立刻上螢幕（轉圈），約 3 秒後變成勾勾
-- [ ] `/fail`：5 秒後變紅點
-- [ ] 紅點連點好幾次重試，夥伴那邊只會出現一則
-- [ ] 列表順序以 Server 核發的 `seq` 為準
+- [ ] 殺掉 App 重開，訊息立刻出現，不會白屏
+- [ ] 講師暫時拒絕你的連線時重開 App：仍然看得到所有訊息，也看得到斷線橫幅
+- [ ] 送到一半就殺掉 App，重開後那則變成紅點
+- [ ] 同一則訊息不會因為重複寫入而出現兩次
 
 ## 思考分享
 
-- 使用者把手機時間調快，訊息順序會亂嗎？
-- 列表有一萬則訊息時，收到 ACK 要怎麼快速找到那一筆？
+- 千人群組每秒湧入 30 則訊息，畫面卡死了怎麼辦？
 
 ## 執行
 
