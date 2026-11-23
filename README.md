@@ -1,4 +1,4 @@
-# 第 9 堂：已讀 + 未讀
+# 第 9 堂：已讀 + 未讀（完成版）
 
 > 分支：`step-9-read-receipts`（starter）／`step-9-read-receipts-done`（完成版）
 > Server：ACK 等級

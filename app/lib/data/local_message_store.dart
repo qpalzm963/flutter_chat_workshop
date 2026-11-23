@@ -16,7 +16,7 @@ class LocalMessageStore {
   final Database _db;
   final _messageChanges = StreamController<String?>.broadcast(); // 哪個房間變了（null = 不確定）
   final _roomChanges = StreamController<void>.broadcast();
-  final _readChanges = StreamController<String>.broadcast(); // 哪個房間的已讀位置變了
+  final _readChanges = StreamController<String>.broadcast();
 
   /// DB 升版：每一版只寫「從上一版怎麼變過來」。新安裝依序跑完全部，舊版本只跑缺的。
   /// 已上線的版本內容永遠不改、不刪欄位，只往後加。
@@ -228,15 +228,24 @@ class LocalMessageStore {
     return rows.isEmpty ? null : Room.fromRow(rows.single);
   }
 
-  /// GET /rooms 與 room_added：Server 說了算
-  // TODO(第 9 堂) ② 房間 JSON 裡的 reads（每個人的已讀位置）也要寫進 reads 表，並通知 _readChanges
+  /// GET /rooms 與 room_added：Server 說了算（含我的水位線），並寫入每個人的已讀位置
   Future<void> upsertRooms(List<Map<String, dynamic>> json) async {
     final batch = _db.batch();
     for (final j in json) {
       batch.insert('rooms', Room.fromServer(j).toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
+      (j['reads'] as Map).forEach(
+        (user, seq) => batch.insert('reads', {
+          'room_id': j['id'],
+          'user': user,
+          'seq': seq,
+        }, conflictAlgorithm: ConflictAlgorithm.replace),
+      );
     }
     await batch.commit(noResult: true);
     _roomChanges.add(null);
+    for (final j in json) {
+      _readChanges.add(j['id'] as String);
+    }
   }
 
   /// 私聊還沒送出第一則前，Server 上還沒有這個房間：先在本地建一筆
@@ -256,9 +265,8 @@ class LocalMessageStore {
     if (n > 0) _roomChanges.add(null);
   }
 
-  // ───────────────────────── 已讀（第 9 堂） ─────────────────────────
+  // ───────────────────────── 已讀 ─────────────────────────
 
-  /// 這個房間每個人讀到哪（user → seq）
   Stream<Map<String, int>> watchReads(String roomId) async* {
     Future<Map<String, int>> query() async => {
       for (final r in await _db.query('reads', where: 'room_id = ?', whereArgs: [roomId]))
@@ -270,8 +278,31 @@ class LocalMessageStore {
     }
   }
 
-  // TODO(第 9 堂) ② setRead：Server 推來的已讀事件寫進 reads；是我自己的就同時更新 rooms.my_read_seq
-  // TODO(第 9 堂) ① advanceMyRead：我的水位線只能前進
+  /// Server 推來的已讀事件（含講師把我的水位線設回去）：照單全收
+  Future<void> setRead(String roomId, String user, int seq, {required bool isMe}) async {
+    await _db.insert('reads', {
+      'room_id': roomId,
+      'user': user,
+      'seq': seq,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    if (isMe) {
+      await _db.update('rooms', {'my_read_seq': seq}, where: 'id = ?', whereArgs: [roomId]);
+      _roomChanges.add(null);
+    }
+    _readChanges.add(roomId);
+  }
+
+  /// 自己回報已讀：水位線只會前進。回傳 false 代表沒有前進（不用回報）
+  Future<bool> advanceMyRead(String roomId, int seq) async {
+    final n = await _db.update(
+      'rooms',
+      {'my_read_seq': seq},
+      where: 'id = ? AND my_read_seq < ?',
+      whereArgs: [roomId, seq],
+    );
+    if (n > 0) _roomChanges.add(null);
+    return n > 0;
+  }
 
   Future<int?> _scalar(String sql, [List<Object?>? args]) async => Sqflite.firstIntValue(await _db.rawQuery(sql, args));
 }

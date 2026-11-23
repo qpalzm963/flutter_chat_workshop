@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
@@ -8,10 +9,7 @@ import 'chat_service.dart';
 import 'chat_socket.dart';
 import 'history_api.dart';
 
-// TODO(第 9 堂) ① 畫面上看得到的最大 seq → Debounce 500ms 回報已讀（只往前推）
-// TODO(第 9 堂) ④ 進房時決定畫面從哪開始：第一則未讀在本地 → 定位；不在本地（新裝置）→ 停在底部並提示上方還有幾則未讀
-
-/// 一個房間一個，從 App 層級那條唯一的連線過濾出自己房間的訊息。單向資料流：
+/// 一個房間一個。單向資料流：
 ///   UI ──send()──▶ DB(sending) ──▶ WS
 ///   WS / REST ──寫入──▶ DB ──Stream──▶ UI
 class ChatController {
@@ -25,27 +23,54 @@ class ChatController {
   final loadingOlder = ValueNotifier(false);
   bool _noMoreHistory = false;
 
+  /// 進房時的第一則未讀（本地有這則才定位；null = 不用定位）
+  int? firstUnreadSeq;
+
+  /// 第一則未讀不在本地（新裝置）：停在底部，提示上方還有幾則未讀
+  int unreadAbove = 0;
+
   late final Stream<List<Message>> messages = service.store.watchMessages(roomId, limit);
+  late final Stream<Map<String, int>> reads = service.store.watchReads(roomId);
 
   final _uuid = const Uuid();
   StreamSubscription<Map<String, dynamic>>? _sub;
+  Timer? _readDebounce;
+  int _visibleMaxSeq = 0;
 
   String get me => service.me;
   bool get _connected => service.socket.status.value == ConnectionStatus.connected;
 
-  /// 進房：開始收這個房間的訊息，有網路就補資料
-  void open() {
+  /// 進房：開始收這個房間的訊息 → 補資料（有網路才補）→ 決定畫面從哪開始
+  Future<void> open() async {
     _sub = service.socket.events
         .where((e) => e['type'] == 'message' && e['room_id'] == roomId)
         .listen((e) => service.store.upsertFromServer([Message.fromServer(e)]));
     service.socket.status.addListener(_onStatusChanged);
-    _onStatusChanged();
+
+    final myRead = (await service.store.room(roomId))?.myReadSeq ?? 0;
+    if (_connected) {
+      try {
+        await _sync().timeout(const Duration(seconds: 4));
+      } catch (_) {
+        // 補不到就先看本地的
+      }
+    }
+    final roomLast = (await service.store.room(roomId))?.lastSeq ?? 0;
+    final lastSeq = max(roomLast, await service.store.latestSeq(roomId) ?? 0);
+    if (lastSeq <= myRead) return;
+    final first = myRead + 1;
+    if (await service.store.hasSeq(roomId, first)) {
+      firstUnreadSeq = first;
+      limit.value = max(HistoryApi.pageSize, await service.store.countFrom(roomId, first) + 20);
+    } else {
+      unreadAbove = lastSeq - myRead;
+    }
   }
 
-  /// 只對「開著的房間」補洞；其他房間點進來時再補
   void _onStatusChanged() {
     if (!_connected) return;
     _sync().catchError((Object _) {}); // 補洞失敗不影響聊天，下次重連再補
+    if (_visibleMaxSeq > 0) service.reportRead(roomId, _visibleMaxSeq); // 斷線時沒報出去的已讀
   }
 
   /// 本地是空的 → 抓最新一頁（第 6 堂）；不是空的 → 從 cursor 往後一頁頁補到底（第 7 堂）。
@@ -65,7 +90,7 @@ class ChatController {
     }
   }
 
-  // ───────────── 發送（ACK、逾時、補送都在 App 層級的 ChatService） ─────────────
+  // ───────────── 發送 ─────────────
 
   Future<void> send(String text) => service.send(
     Message(
@@ -107,7 +132,18 @@ class ChatController {
     }
   }
 
+  // ───────────── 已讀：畫面上真的看到才算，Debounce 500ms 回報 ─────────────
+
+  void onVisibleMaxSeq(int seq) {
+    if (seq <= _visibleMaxSeq) return; // 只往前推
+    _visibleMaxSeq = seq;
+    _readDebounce?.cancel();
+    _readDebounce = Timer(const Duration(milliseconds: 500), () => service.reportRead(roomId, _visibleMaxSeq));
+  }
+
   void dispose() {
+    _readDebounce?.cancel();
+    if (_visibleMaxSeq > 0) service.reportRead(roomId, _visibleMaxSeq); // 離開前把最後看到的報出去
     _sub?.cancel();
     service.socket.status.removeListener(_onStatusChanged);
     limit.dispose();

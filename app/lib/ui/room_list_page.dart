@@ -100,11 +100,11 @@ class _RoomTile extends StatelessWidget {
       _ => Icons.group,
     };
     final preview = room.lastText == null ? '還沒有訊息' : '${room.lastSender}：${room.lastText}';
-    // TODO(第 9 堂) ③ 右邊顯示未讀數（Badge）
     return ListTile(
       leading: CircleAvatar(child: Icon(icon)),
       title: Text(room.titleFor(me)),
       subtitle: Text(preview, maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: room.unread > 0 ? Badge(label: Text(room.unread > 999 ? '999+' : '${room.unread}')) : null,
       onTap: onTap,
     );
   }

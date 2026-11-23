@@ -1,3 +1,5 @@
+import 'dart:math';
+
 class Room {
   const Room({
     required this.id,
@@ -27,7 +29,7 @@ class Room {
   /// 我的已讀水位線
   final int myReadSeq;
 
-  // TODO(第 9 堂) ③ 未讀數 = 房間最新 seq − 我的水位線（不能是負的）
+  int get unread => max(0, lastSeq - myReadSeq);
 
   /// 私聊顯示對方名字
   String titleFor(String me) => kind == 'dm' ? members.firstWhere((m) => m != me, orElse: () => name) : name;
