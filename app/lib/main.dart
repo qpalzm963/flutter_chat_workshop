@@ -17,7 +17,7 @@ class ChatWorkshopApp extends StatelessWidget {
     return MaterialApp(
       title: 'Chat Workshop',
       theme: ThemeData(colorSchemeSeed: Colors.teal),
-      home: presetUser.isNotEmpty ? const _Boot(user: presetUser) : const NamePage(),
+      home: const NamePage(),
     );
   }
 }
@@ -31,12 +31,20 @@ class NamePage extends StatefulWidget {
 }
 
 class _NamePageState extends State<NamePage> {
-  final _name = TextEditingController();
+  final _name = TextEditingController(text: presetUser);
+
+  @override
+  void initState() {
+    super.initState();
+    // 帶了 --dart-define=USER 就直接進聊天頁；按返回會回到這頁，聊天頁的 dispose() 才會被呼叫
+    if (presetUser.isNotEmpty) WidgetsBinding.instance.addPostFrameCallback((_) => _enter());
+  }
 
   void _enter() {
     final name = _name.text.trim();
     if (name.isEmpty) return;
-    Navigator.of(context).pushReplacement(MaterialPageRoute<void>(builder: (_) => _Boot(user: name)));
+    // 用 push 而不是 pushReplacement：聊天頁要能返回，才驗得到離開時有沒有收乾淨
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => _Boot(user: name)));
   }
 
   @override

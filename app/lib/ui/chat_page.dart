@@ -38,7 +38,7 @@ class _ChatPageState extends State<ChatPage> {
   bool _hasUnseen = false;
   bool _showUnreadAbove = false;
   bool _atBottomCache = true;
-  String? _newestId;
+  String? _newestKey;
 
   String get _me => widget.service.me;
 
@@ -79,9 +79,12 @@ class _ChatPageState extends State<ChatPage> {
   /// 新訊息進來時：在底部就自然出現；正在往上翻就只亮「有新訊息」不拉回去
   void _onNewList(List<Message> list) {
     final newest = list.isEmpty ? null : list.first;
-    if (newest == null || newest.clientMsgId == _newestId) return;
-    final isFirstLoad = _newestId == null;
-    _newestId = newest.clientMsgId;
+    // key 帶上 seq：自己剛送出的那則 ACK 回來時 clientMsgId 沒變、seq 從 null 變成有值，
+    // 這時氣泡才被 SeqTracker 登記，要再算一次看得到的最大 seq，不然離開後會被算成未讀 1
+    final key = newest == null ? null : '${newest.clientMsgId}#${newest.seq}';
+    if (newest == null || key == _newestKey) return;
+    final isFirstLoad = _newestKey == null;
+    _newestKey = key;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _checkVisible();

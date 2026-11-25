@@ -55,10 +55,12 @@ class ChatService {
 
   // ───────────── 每次連上（含 App 剛啟動）：重拉房間列表 + 補送 ─────────────
 
-  void _onStatusChanged() {
+  Future<void> _onStatusChanged() async {
     if (socket.status.value != ConnectionStatus.connected) return;
-    _syncRooms();
-    _flushOutbox();
+    // 先拉完房間再補送：從第 7 堂升上來的舊訊息 room_id 還是 ''，要等 adoptLegacyMessages 歸位，
+    // 不然補送會帶 room_id: ''，被 Server 回「房間不存在」
+    await _syncRooms();
+    await _flushOutbox();
   }
 
   Future<void> _syncRooms() async {
