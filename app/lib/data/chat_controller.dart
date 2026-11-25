@@ -9,7 +9,6 @@ import 'chat_socket.dart';
 import 'history_api.dart';
 
 // TODO(第 9 堂) ① 畫面上看得到的最大 seq → Debounce 500ms 回報已讀（只往前推）
-// TODO(第 9 堂) ④ 進房時決定畫面從哪開始：第一則未讀在本地 → 定位；不在本地（新裝置）→ 停在底部並提示上方還有幾則未讀
 
 /// 一個房間一個，從 App 層級那條唯一的連線過濾出自己房間的訊息。單向資料流：
 ///   UI ──send()──▶ DB(sending) ──▶ WS
