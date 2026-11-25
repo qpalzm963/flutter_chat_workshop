@@ -22,7 +22,7 @@ class ChatSocket {
   StreamSubscription<dynamic>? _sub;
 
   // TODO(第 2 堂) 心跳：每 10 秒送 {"type":"ping"}，5 秒內沒收到 pong 就當作假死、主動斷線
-  // TODO(第 2 堂) 重連：1s → 2s → 4s …，上限 30s，再加隨機毫秒（Jitter）
+  // TODO(第 2 堂) 重連：Exponential Backoff（1s → 2s → 4s …，上限 30s）
 
   Future<void> connect() async {
     final channel = WebSocketChannel.connect(url);
