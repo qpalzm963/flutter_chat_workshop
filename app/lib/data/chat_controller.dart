@@ -38,14 +38,11 @@ class ChatController {
   }
 
   // TODO(第 4 堂) ② 樂觀更新：先插入一筆 sending 上螢幕，再送出 JSON（帶 client_msg_id，套件：uuid）
-  // TODO(第 4 堂) ④ 5 秒沒收到 ACK → failed
   // TODO(第 4 堂) 列表排序以 seq 為準（還沒拿到 seq 的排最前面）
   void send(String text) => socket.send({'type': 'send', 'sender': me, 'text': text});
 
   /// 點紅點重試
-  void retry(Message msg) {
-    // TODO(第 4 堂) ⑤ 重試
-  }
+  void retry(Message msg) {}
 
   void dispose() {
     _sub?.cancel();
