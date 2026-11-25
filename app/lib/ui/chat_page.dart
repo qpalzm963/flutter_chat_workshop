@@ -28,9 +28,6 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   // TODO(第 3 堂) ① 改用 ListView.builder(reverse: true)：index 0 在最底，就不用反轉、也不用每次跳到底
-  // TODO(第 3 堂) ② 用 _scroll 判斷目前是不是在最底部
-  // TODO(第 3 堂) ③ 往上翻時有新訊息：不要拉回去，改顯示「有新訊息 ↓」提示（元件自己寫）
-  // TODO(第 3 堂) ④ 點提示或自己送出時，捲回最底部
 
   /// 一般列表：最新的在最下面，所以每次有新資料就跳到底（進房會閃一下的原因）
   void _jumpToBottom() {
