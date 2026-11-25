@@ -8,6 +8,7 @@ import 'connection_banner.dart';
 import 'loading_older_indicator.dart';
 import 'message_bubble.dart';
 
+// TODO(第 8 堂) ② 改吃 (service, room)：改用 ChatController(service: widget.service, roomId: widget.room.id)..open()、標題用 room.titleFor(_me)、連線橫幅改接 service.socket.status
 class ChatPage extends StatefulWidget {
   const ChatPage({super.key, required this.me, required this.store});
 
