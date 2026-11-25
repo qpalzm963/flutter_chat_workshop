@@ -75,6 +75,8 @@ class Conn {
 String? admin;
 var level = Level.raw;
 var delayMs = 0;
+var serverPort = 8080;
+var lanIps = <String>[];
 
 final rooms = <String, Room>{};
 final conns = <String, Conn>{}; // user → 目前的連線（同名只允許一條）
@@ -90,6 +92,31 @@ const dropRejectFor = Duration(seconds: 5);
 const botDelay = Duration(seconds: 2);
 const slowAck = Duration(seconds: 3);
 
+Future<List<String>> _detectLanIps() async {
+  try {
+    final ifs = await NetworkInterface.list(type: InternetAddressType.IPv4, includeLoopback: false);
+    final ips = <String>{};
+    bool isVirtualIf(String name) =>
+        RegExp(r'^(utun|awdl|llw|bridge|lo|docker|veth|vmnet|vboxnet|tailscale)').hasMatch(name);
+    for (final i in ifs) {
+      if (isVirtualIf(i.name)) continue;
+      for (final a in i.addresses) {
+        final ip = a.address;
+        if (a.isLoopback || ip.startsWith('169.254.') || ip.startsWith('198.18.') || ip.startsWith('198.19.')) continue;
+        ips.add(ip);
+      }
+    }
+    final list = ips.toList();
+    list.sort((a, b) {
+      int rank(String s) => s.startsWith('192.168.') ? 0 : s.startsWith('10.') ? 1 : s.startsWith('172.') ? 2 : 3;
+      return rank(a).compareTo(rank(b));
+    });
+    return list;
+  } catch (_) {
+    return const [];
+  }
+}
+
 Future<void> main(List<String> args) async {
   var port = 8080;
   String? dataPath;
@@ -99,9 +126,12 @@ Future<void> main(List<String> args) async {
     if (a.startsWith('--level=')) level = Level.values.byName(a.substring(8));
     if (a.startsWith('--data=')) dataPath = a.substring(7);
   }
+  serverPort = port;
+  lanIps = await _detectLanIps();
   if (dataPath != null) _startPersistence(File(dataPath));
   final server = await HttpServer.bind(InternetAddress.anyIPv4, port);
-  _log('listening on :$port  ws=/ws?user=  dashboard=http://localhost:$port/admin  '
+  final ipHint = lanIps.isEmpty ? 'localhost' : lanIps.join(', ');
+  _log('listening on :$port (LAN: $ipHint)  ws=/ws?user=  dashboard=http://localhost:$port/admin  '
       'admin=${admin ?? '(未設定)'}  level=${level.name}  data=${dataPath ?? '(只放記憶體)'}');
   await for (final req in server) {
     _handle(req).catchError((Object e) => _log('error: $e'));
@@ -115,6 +145,11 @@ Future<void> _handle(HttpRequest req) async {
   if (req.method == 'GET' && (path == '/' || path == '/admin')) {
     req.response.headers.contentType = ContentType.html;
     req.response.write(_dashboardHtml);
+    return req.response.close();
+  }
+  if (req.method == 'GET' && path == '/ws-test') {
+    req.response.headers.contentType = ContentType.html;
+    req.response.write(_wsTestHtml);
     return req.response.close();
   }
   if (req.method == 'GET' && path == '/admin/state') return _json(req, _adminState(req.uri.queryParameters['room']));
@@ -438,6 +473,8 @@ Map<String, dynamic> _adminState(String? selected) {
   final users = {...assigned.keys, ...conns.keys}.toList()..sort();
   return {
     'admin': admin,
+    'port': serverPort,
+    'ips': lanIps,
     'level': level.name,
     'delay_ms': delayMs,
     'users': [
@@ -540,6 +577,21 @@ Future<void> _adminAction(HttpRequest req) async {
       }
     case 'read':
       _setRead(room(), body['user'] as String, body['seq'] as int, force: true);
+    case 'remove':
+      final target = body['user'] as String;
+      final list = target == '@offline'
+          ? {...assigned.keys, ...conns.keys}.where((u) => !conns.containsKey(u)).toList()
+          : [target];
+      for (final u in list) {
+        conns.remove(u)?.ws.close(WebSocketStatus.goingAway, 'removed');
+        blockedUntil.remove(u);
+        assigned.remove(u);
+        for (final r in rooms.values) {
+          r.members.remove(u);
+          r.reads.remove(u);
+        }
+      }
+      rooms.removeWhere((_, r) => r.kind == 'private' && r.members.isEmpty);
     default:
       return _json(req, {'error': 'unknown action'}, status: 400);
   }
@@ -639,118 +691,989 @@ void _log(String s) => stdout.writeln('[${DateTime.now().toIso8601String().subst
 
 const _dashboardHtml = r'''<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>講師儀表板</title>
+<title>講師控制台 · Flutter 聊天室工作坊</title>
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--fg:#1d2433;--mut:#6b7385;--line:#e3e6ec;--acc:#2f6fed;--ok:#1a9a5b;--bad:#d64545;--warn:#c98a00}
-*{box-sizing:border-box}body{margin:0;font:14px/1.45 -apple-system,"PingFang TC",sans-serif;background:var(--bg);color:var(--fg)}
-header{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:1}
-h1{font-size:17px;margin:0 12px 0 0}h2{font-size:15px;margin:0 0 10px}
-main{display:grid;grid-template-columns:minmax(320px,1fr) minmax(360px,1.3fr);gap:16px;padding:16px 20px}
-section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
-table{border-collapse:collapse;width:100%}td,th{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}th{color:var(--mut);font-weight:500}
-button{font:inherit;padding:4px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;cursor:pointer}button:hover{border-color:var(--acc)}
-button.pri{background:var(--acc);color:#fff;border-color:var(--acc)}button.danger{color:var(--bad)}
-input,select{font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px}input[type=number]{width:70px}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}.mut{color:var(--mut)}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:#bbb}.on{background:var(--ok)}.zb{background:var(--warn)}.bl{background:var(--bad)}
-.room{padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;cursor:pointer}.room.sel{border-color:var(--acc);background:#f0f5ff}
-.msgs{max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px;font-size:13px}
-.msgs div{padding:2px 0}.seq{color:var(--mut);font-variant-numeric:tabular-nums;display:inline-block;min-width:44px}
-.lv button.sel{background:var(--fg);color:#fff}
-@media(max-width:900px){main{grid-template-columns:1fr}}
+:root{
+  --ground:#f6f6f4;--panel:#ffffff;--well:#efefe9;--ink:#16171a;--muted:#5c6068;
+  --rule:#dcdcd6;--rule-soft:#ecece6;
+  --cobalt:#1b4fd8;--cobalt-hover:#1640b0;--cobalt-tint:#edf2ff;--cobalt-ring:#bfd0ff;
+  --fault:#c82333;--fault-tint:#fdf2f3;--fault-rule:#f3c4c9;
+  --ok:#15803d;--ok-tint:#eefaf2;
+  --warn:#a16207;--warn-tint:#fef9ec;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang TC","Noto Sans TC",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;font:13.5px/1.5 var(--sans);background:var(--ground);color:var(--ink);
+  -webkit-font-smoothing:antialiased;display:flex;flex-direction:column;
+}
+body.hide-hints .hint{display:none!important}
+:focus-visible{outline:2px solid var(--cobalt);outline-offset:1px}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* Top Console Bar */
+header{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--rule);
+  flex-shrink:0;
+}
+.title-block{display:flex;align-items:baseline;gap:10px;margin-right:auto}
+.title-block h1{font-size:15px;font-weight:700;margin:0;letter-spacing:-.01em}
+.title-block .adm{font-size:12.5px;color:var(--muted)}
+
+.ctrl{display:flex;align-items:center;gap:6px}
+.ctrl-label{font-size:12.5px;color:var(--muted);font-weight:500}
+.seg{display:inline-flex;background:var(--well);padding:2px;border-radius:6px;border:1px solid var(--rule)}
+.seg button{
+  border:none;background:transparent;padding:4px 10px;border-radius:4px;
+  font-size:12.5px;color:var(--muted);font-weight:600;white-space:nowrap;
+}
+.seg button:hover{color:var(--ink);background:transparent}
+.seg button.sel{background:var(--ink);color:#fff}
+.qbtn{
+  width:20px;height:20px;padding:0;border-radius:50%;border:1px solid var(--rule);
+  background:var(--well);color:var(--muted);font-size:11.5px;font-weight:700;
+  display:inline-grid;place-items:center;cursor:pointer;flex-shrink:0;
+}
+.qbtn:hover{border-color:var(--cobalt);color:var(--cobalt);background:var(--cobalt-tint)}
+
+/* Broadcast Connection Strip (The one bold anchor) */
+.netbar{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:9px 18px;background:var(--ink);color:#f4f4f2;border-bottom:1px solid #000;
+  flex-shrink:0;
+}
+.netbar-label{font-size:12.5px;color:#a3a7b0;font-weight:500}
+.ip-list{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.ippill{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:4px;
+  background:#262930;border:1px solid #3c404a;color:#ffffff;
+  font-family:var(--mono);font-size:13px;font-weight:600;cursor:pointer;
+}
+.ippill:hover{border-color:#7ea2ff}
+.ippill.active{background:var(--cobalt);border-color:var(--cobalt);color:#fff}
+.port-tag{font-family:var(--mono);font-size:12.5px;color:#a3a7b0}
+.cmdbox{
+  background:#0d0e11;border:1px solid #323640;color:#e5e7eb;
+  font-family:var(--mono);font-size:12.5px;padding:4px 10px;border-radius:4px;
+  cursor:pointer;user-select:all;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.cmdbox:hover{border-color:#7ea2ff}
+.netbar-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+.btn-dark{
+  background:transparent;color:#f4f4f2;border:1px solid #484d59;
+  padding:4px 10px;border-radius:5px;font-size:12.5px;font-weight:500;cursor:pointer;
+}
+.btn-dark:hover{border-color:#fff;background:#262930}
+.btn-dark.primary{background:var(--cobalt);border-color:var(--cobalt);color:#fff}
+.btn-dark.primary:hover{background:var(--cobalt-hover)}
+
+/* Lesson Preset Strip */
+.lessons{background:var(--panel);border-bottom:1px solid var(--rule);flex-shrink:0}
+.lessons-bar{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:7px 18px;background:var(--ground);border-bottom:1px solid var(--rule-soft);
+}
+.lessons-title{font-size:12.5px;font-weight:600;color:var(--ink);margin-right:4px}
+.ltabs{display:flex;gap:4px;flex-wrap:wrap}
+.ltab{
+  padding:3px 8px;border-radius:4px;border:1px solid transparent;background:transparent;
+  font-size:12.5px;color:var(--muted);font-weight:500;cursor:pointer;
+}
+.ltab:hover{color:var(--ink);background:var(--well)}
+.ltab.sel{background:var(--cobalt-tint);color:var(--cobalt);border-color:var(--cobalt-ring);font-weight:600}
+.lessons-detail{
+  display:grid;grid-template-columns:150px minmax(0,1.2fr) minmax(0,1fr);gap:18px;
+  padding:10px 18px;font-size:13px;background:var(--panel);
+}
+.lessons-detail[hidden]{display:none}
+.ld-col h4{margin:0 0 3px;font-size:12px;font-weight:600;color:var(--muted)}
+.ld-col p{margin:0;color:var(--ink);max-width:74ch}
+.ld-acts{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+
+/* 3-Column Architectural Workbench */
+.desk{
+  flex:1;min-height:0;display:grid;
+  grid-template-columns:minmax(320px,1.05fr) minmax(300px,0.95fr) minmax(340px,1.15fr);
+  background:var(--ground);
+}
+.pane{
+  display:flex;flex-direction:column;min-width:0;min-height:0;
+  border-right:1px solid var(--rule);overflow-y:auto;
+}
+.pane:last-child{border-right:none;background:var(--panel)}
+
+.block{padding:16px 18px;border-bottom:1px solid var(--rule)}
+.block:last-child{border-bottom:none}
+.block-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.block-head h2{font-size:14px;font-weight:700;margin:0}
+.block-sub{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* Contextual Hints (toggleable) */
+.hint{
+  font-size:12.5px;color:var(--muted);background:var(--well);
+  padding:7px 10px;border-radius:5px;margin:0 0 10px;line-height:1.55;max-width:72ch;
+}
+.hint b{color:var(--ink);font-weight:600}
+.hint code,.lessons-detail code{
+  font-family:var(--mono);font-size:11.5px;background:rgba(22,23,26,.07);
+  padding:1px 4px;border-radius:3px;color:var(--ink);
+}
+
+/* Base Controls */
+button{
+  font:inherit;font-size:12.5px;font-weight:500;padding:4px 10px;border-radius:5px;
+  border:1px solid var(--rule);background:var(--panel);color:var(--ink);cursor:pointer;
+}
+button:hover{background:var(--well);border-color:#bdbdb6}
+button.pri{background:var(--cobalt);border-color:var(--cobalt);color:#fff}
+button.pri:hover{background:var(--cobalt-hover);border-color:var(--cobalt-hover)}
+button.fault{color:var(--fault);border-color:var(--fault-rule);background:var(--panel)}
+button.fault:hover{background:var(--fault-tint);border-color:var(--fault)}
+button.xs{padding:2px 7px;font-size:12px}
+input{
+  font:inherit;font-size:13px;padding:4px 8px;border:1px solid var(--rule);
+  border-radius:5px;background:var(--panel);color:var(--ink);
+}
+input:focus{border-color:var(--cobalt);outline:none;box-shadow:0 0 0 2px var(--cobalt-ring)}
+input[type=number]{width:66px;font-variant-numeric:tabular-nums}
+
+.row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:8px 0}
+.mut{color:var(--muted)}
+
+/* Status Summary & Dots */
+.stats{display:flex;gap:12px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-bottom:8px;font-variant-numeric:tabular-nums}
+.stats span{display:inline-flex;align-items:center;gap:5px}
+.stats b{color:var(--ink)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#b8bcc4;flex-shrink:0}
+.dot.on{background:var(--ok)}
+.dot.zb{background:var(--warn)}
+.dot.bl{background:var(--fault)}
+
+/* Tables */
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{font-size:12px;font-weight:600;color:var(--muted);padding:6px 6px;border-bottom:1px solid var(--rule);text-align:left}
+td{padding:7px 6px;border-bottom:1px solid var(--rule-soft);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:rgba(22,23,26,.025)}
+.acts{display:flex;gap:4px;flex-wrap:nowrap;justify-content:flex-end;white-space:nowrap}
+.st-tag{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:1px 7px;border-radius:4px;font-weight:500;white-space:nowrap;font-variant-numeric:tabular-nums;min-width:74px}
+.room-cell{font-family:var(--mono);font-size:12px;color:var(--muted);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-tag.on{background:var(--ok-tint);color:var(--ok)}
+.st-tag.zb{background:var(--warn-tint);color:var(--warn)}
+.st-tag.bl{background:var(--fault-tint);color:var(--fault)}
+.st-tag.off{background:var(--well);color:var(--muted)}
+
+/* Group Member Picker */
+.chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+.chip{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:4px;
+  border:1px solid var(--rule);background:var(--panel);font-size:12.5px;cursor:pointer;user-select:none;
+}
+.chip:has(input:checked){background:var(--cobalt-tint);border-color:var(--cobalt);color:var(--cobalt);font-weight:600}
+.chip input{margin:0;accent-color:var(--cobalt)}
+
+/* Room List */
+.room-list{display:flex;flex-direction:column;border:1px solid var(--rule);border-radius:6px;background:var(--panel);overflow:hidden}
+.room{
+  padding:10px 12px;border-bottom:1px solid var(--rule-soft);cursor:pointer;
+  display:flex;flex-direction:column;gap:4px;background:var(--panel);
+}
+.room:last-child{border-bottom:none}
+.room:hover{background:var(--ground)}
+.room.sel{background:var(--cobalt-tint);box-shadow:inset 3px 0 0 var(--cobalt)}
+.room-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.room-name{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.room-seq{font-family:var(--mono);font-size:12px;color:var(--muted);flex-shrink:0}
+.room-sub{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.room-id{font-family:var(--mono)}
+.kind{padding:0 5px;border-radius:3px;font-size:11.5px;font-weight:500;background:var(--well);color:var(--ink)}
+.kind.pair{background:#e8effd;color:#1b4fd8}
+.kind.lobby{background:#e7f6ec;color:#15803d}
+.kind.group{background:#f3e8ff;color:#6b21a8}
+.kind.dm{background:#fff1e6;color:#9a3412}
+.room-members{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--ink);margin-top:2px}
+.rm{display:inline-flex;align-items:center;gap:4px}
+
+/* Right Pane: Room Inspector */
+.empty-inspector{
+  margin:auto;padding:36px 24px;text-align:center;color:var(--muted);max-width:34ch;
+}
+.empty-inspector h3{margin:0 0 6px;font-size:14.5px;color:var(--ink)}
+.empty-inspector p{margin:0;font-size:13px}
+.inspector-head{
+  padding:14px 18px;border-bottom:1px solid var(--rule);background:var(--panel);
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;
+}
+.inspector-head h2{margin:0;font-size:15px;font-weight:700}
+.inspector-head .meta{font-family:var(--mono);font-size:12px;color:var(--muted)}
+
+.prog{height:5px;background:var(--well);border-radius:3px;overflow:hidden;margin-top:4px;width:110px}
+.prog>i{display:block;height:100%;background:var(--cobalt)}
+
+.msgs{
+  max-height:320px;overflow-y:auto;border:1px solid var(--rule);border-radius:5px;
+  background:var(--ground);padding:6px 10px;font-size:13px;
+}
+.msg-item{padding:4px 0;border-bottom:1px solid var(--rule-soft);display:flex;gap:8px;align-items:baseline}
+.msg-item:last-child{border-bottom:none}
+.seq{color:var(--muted);font-family:var(--mono);font-size:12px;min-width:42px;flex-shrink:0}
+.sender{font-weight:600;color:var(--cobalt);white-space:nowrap}
+.msg-text{word-break:break-word}
+
+/* Projection Overlay (Student-facing only) */
+.modal{position:fixed;inset:0;background:#0d0e11;color:#fff;display:grid;place-items:center;z-index:50;padding:28px}
+.modal[hidden]{display:none}
+.modal-card{max-width:920px;width:100%;text-align:left}
+.modal-kicker{font-size:16px;color:#9ca3af;margin-bottom:10px}
+.modal-ip{font-family:var(--mono);font-size:clamp(42px,8vw,88px);font-weight:700;color:#fff;letter-spacing:-.02em;line-height:1.1;margin:0 0 24px}
+.modal-ip span{color:#7ea2ff}
+.modal-cmd{
+  background:#181a20;border:1px solid #323640;border-radius:8px;padding:18px 22px;
+  font-family:var(--mono);font-size:clamp(16px,2.2vw,24px);color:#f9fafb;
+  margin:0 0 18px;word-break:break-all;cursor:pointer;
+}
+.modal-note{color:#9ca3af;font-size:15px;margin:0 0 28px}
+.modal-note code{font-family:var(--mono);color:#fff;background:#262930;padding:2px 6px;border-radius:4px}
+
+/* Help Reference Modal */
+.help-modal{position:fixed;inset:0;background:rgba(22,23,26,.45);display:grid;place-items:center;z-index:55;padding:24px}
+.help-modal[hidden]{display:none}
+.help-card{
+  background:var(--panel);color:var(--ink);border:1px solid var(--rule);border-radius:8px;
+  max-width:860px;width:100%;max-height:86vh;display:flex;flex-direction:column;
+  box-shadow:0 20px 50px rgba(22,23,26,.22);overflow:hidden;
+}
+.help-head{
+  display:flex;align-items:center;justify-content:space-between;padding:12px 18px;
+  border-bottom:1px solid var(--rule);background:var(--ground);flex-shrink:0;
+}
+.help-head h2{margin:0;font-size:15px;font-weight:700}
+.help-body{padding:16px 20px;overflow-y:auto;display:flex;flex-direction:column;gap:18px}
+.help-sec h3{margin:0 0 8px;font-size:13.5px;font-weight:700;color:var(--ink)}
+.lv-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.lv-box{border:1px solid var(--rule);border-radius:6px;padding:10px 12px;background:var(--ground)}
+.lv-box h4{margin:0 0 4px;font-size:13px;font-weight:700}
+.lv-box .sub{font-size:12px;color:var(--cobalt);font-weight:600;margin-bottom:6px}
+.lv-box p{margin:0;font-size:12.5px;color:var(--muted);line-height:1.55}
+.help-list{margin:0;padding-left:18px;font-size:13px;color:var(--muted);line-height:1.65}
+.help-list b{color:var(--ink)}
+.help-list code,.lv-box code{font-family:var(--mono);font-size:11.5px;background:rgba(22,23,26,.07);padding:1px 4px;border-radius:3px;color:var(--ink)}
+@media(max-width:760px){.lv-grid{grid-template-columns:1fr}}
+
+.toast{
+  position:fixed;bottom:18px;right:18px;background:var(--ink);color:#fff;
+  padding:8px 14px;border-radius:6px;font-size:13px;font-weight:500;
+  opacity:0;pointer-events:none;z-index:60;transition:opacity .15s;
+}
+.toast.show{opacity:1}
+
+/* Floating WS Test Window */
+.ws-float{
+  position:fixed;right:20px;bottom:20px;width:480px;height:560px;
+  min-width:340px;min-height:360px;max-width:calc(100vw - 24px);max-height:calc(100vh - 64px);
+  background:var(--panel);border:1px solid var(--ink);border-radius:8px;
+  box-shadow:0 16px 40px rgba(22,23,26,.22);z-index:45;
+  display:flex;flex-direction:column;overflow:hidden;resize:both;
+}
+.ws-float[hidden]{display:none}
+.ws-float.min{height:auto!important;min-height:0;width:340px;resize:none}
+.ws-float.min .wsf-body{display:none}
+.wsf-head{
+  display:flex;align-items:center;gap:8px;padding:8px 12px;
+  background:var(--ink);color:#fff;cursor:move;user-select:none;flex-shrink:0;
+}
+.wsf-title{font-size:13px;font-weight:600;margin-right:auto;display:inline-flex;align-items:center;gap:7px}
+.wsf-st{font-size:11.5px;padding:1px 7px;border-radius:4px;background:#262930;color:#a3a7b0;font-weight:500}
+.wsf-st.on{background:#123822;color:#6ee7b7}
+.wsf-st.ing{background:#3d2c0b;color:#fcd34d}
+.wsf-st.err{background:#3f1218;color:#fda4af}
+.wsf-hbtn{background:transparent;border:1px solid #3c404a;color:#d1d5db;font-size:11.5px;padding:2px 7px;border-radius:4px;cursor:pointer}
+.wsf-hbtn:hover{border-color:#fff;color:#fff;background:#262930}
+.wsf-body{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--ground)}
+.wsf-conn{display:flex;gap:6px;padding:8px 10px;background:var(--panel);border-bottom:1px solid var(--rule);flex-shrink:0}
+.wsf-conn input{flex:1;min-width:0;font-family:var(--mono);font-size:12px}
+.wsf-send{padding:8px 10px;background:var(--panel);border-bottom:1px solid var(--rule);flex-shrink:0}
+.wsf-tpls{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}
+.wsf-send textarea{
+  width:100%;height:74px;resize:vertical;font-family:var(--mono);font-size:12px;line-height:1.45;
+  padding:6px 8px;border:1px solid var(--rule);border-radius:5px;background:var(--ground);color:var(--ink);
+}
+.wsf-send textarea:focus{border-color:var(--cobalt);outline:none;background:var(--panel)}
+.wsf-srow{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
+.wsf-logs{flex:1;min-height:0;overflow-y:auto;padding:8px 10px;font-family:var(--mono);font-size:12px}
+.wsf-entry{padding:6px 0;border-bottom:1px solid var(--rule-soft)}
+.wsf-entry:last-child{border-bottom:none}
+.wsf-emeta{display:flex;align-items:center;gap:6px;margin-bottom:3px;font-size:11px;color:var(--muted)}
+.wsf-dir{font-family:var(--sans);font-weight:600;padding:0 5px;border-radius:3px;font-size:11px}
+.wsf-dir.tx{background:var(--cobalt-tint);color:var(--cobalt)}
+.wsf-dir.rx{background:var(--ok-tint);color:var(--ok)}
+.wsf-dir.sys{background:var(--well);color:var(--muted)}
+.wsf-dir.err{background:var(--fault-tint);color:var(--fault)}
+.wsf-pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12px;line-height:1.4;color:var(--ink)}
+
+@media(max-width:1180px){
+  .desk{grid-template-columns:1fr 1fr;height:auto}
+  .pane{overflow:visible;border-bottom:1px solid var(--rule)}
+  .pane:last-child{grid-column:1 / -1;border-right:none}
+}
+@media(max-width:760px){
+  .desk{grid-template-columns:1fr}
+  .pane{border-right:none}
+  .lessons-detail{grid-template-columns:1fr;gap:10px}
+}
 </style></head><body>
+
 <header>
-  <h1>講師儀表板</h1>
-  <span class="lv">行為等級
-    <button data-lv="raw">純字串</button><button data-lv="echo">第 1～3 堂：回音</button><button data-lv="ack">第 4 堂起：ACK</button>
-  </span>
-  <span>全域延遲 <input id="delay" type="number" min="0" step="500"> ms <button onclick="act({action:'delay',ms:+$('delay').value||0})">套用</button></span>
-  <span class="mut" id="adm"></span>
+  <div class="title-block">
+    <h1>Flutter 聊天室工作坊控制台</h1>
+    <span class="adm" id="adm">講師帳號：載入中</span>
+  </div>
+
+  <div class="ctrl">
+    <span class="ctrl-label">行為等級</span>
+    <button class="qbtn" onclick="$('helpModal').hidden=false" title="查看「純字串 / 回音 / ACK」差別說明">?</button>
+    <div class="seg">
+      <button data-lv="raw" title="第 1 堂前半：收到純文字就廣播純文字（不包 JSON、不回 ACK）">純字串</button>
+      <button data-lv="echo" title="第 1～3 堂：把訊息包成 JSON 廣播給所有人含自己（不回 ACK）">回音 (L1–3)</button>
+      <button data-lv="ack" title="第 4 堂起：message 只廣播給其他人，發送者改收 ACK">ACK (L4+)</button>
+    </div>
+  </div>
+
+  <div class="ctrl" title="Server 收到訊息後延遲處理，示範第 3 堂結尾與第 4 堂樂觀更新">
+    <span class="ctrl-label">全域延遲</span>
+    <input id="delay" type="number" min="0" step="500">
+    <span class="mut" style="font-size:12px">ms</span>
+    <button onclick="act({action:'delay',ms:+$('delay').value||0})">套用</button>
+    <button onclick="$('delay').value=2000;act({action:'delay',ms:2000})">設為 2 秒</button>
+    <button onclick="$('delay').value=0;act({action:'delay',ms:0})">歸零</button>
+  </div>
+
+  <button onclick="$('helpModal').hidden=false">操作說明</button>
 </header>
-<main>
-<div>
-  <section>
-    <h2>學員</h2>
-    <div class="row">全部在線：<button class="danger" onclick="act({action:'drop',user:'@all'})">/drop @all</button>
-      <button class="danger" onclick="act({action:'zombie',user:'@all'})">/zombie @all</button>
-      拒絕秒數 <input id="rejs" type="number" value="30" min="1"></div>
-    <table><thead><tr><th></th><th>名字</th><th>分配房間</th><th></th></tr></thead><tbody id="users"></tbody></table>
-  </section>
-  <section style="margin-top:16px">
-    <h2>分房</h2>
-    <div class="row"><button onclick="act({action:'assign',mode:'private'})">私人房</button>
-      <button onclick="act({action:'assign',mode:'pairs'})">兩兩一組</button>
-      <button onclick="act({action:'assign',mode:'lobby'})">大廳</button>
-      <span class="mut">（只搬在線學員）</span></div>
-    <div class="row">自訂群組 <input id="gname" placeholder="群組名稱" value="活動群"> <button class="pri" onclick="mkGroup()">建立並拉人</button></div>
-    <div class="row" id="gusers"></div>
-  </section>
-  <section style="margin-top:16px">
-    <h2>重連時間軸 <span class="mut">（最近 3 次 /drop，0～40 秒；<span class="dot on"></span>連上 <span class="dot bl"></span>被拒）</span></h2>
-    <div id="tl" class="mut">還沒有 /drop 紀錄</div>
-  </section>
+
+<div class="netbar">
+  <span class="netbar-label">區網位址</span>
+  <span class="ip-list" id="ips">偵測中</span>
+  <span class="netbar-label">WS 網址</span>
+  <span class="cmdbox" id="wsurl" onclick="copyText(this.textContent,'已複製 WS 連線網址')" title="點擊複製 WebSocket 連線網址">ws://localhost:8080/ws?user=名字</span>
+  <span class="netbar-label">啟動指令</span>
+  <span class="cmdbox" id="runcmd" onclick="copyText(this.textContent,'已複製啟動指令')" title="點擊複製學員啟動指令">flutter run --dart-define=USER=名字 --dart-define=HOST=localhost</span>
+  <div class="netbar-actions">
+    <button class="btn-dark" onclick="copyText($('wsurl').textContent,'已複製 WS 連線網址')">複製 WS</button>
+    <button class="btn-dark" onclick="toggleWsFloat()">WS 測試視窗</button>
+    <button class="btn-dark primary" onclick="openProj()">投影給同學</button>
+  </div>
 </div>
-<div>
-  <section>
-    <h2>房間</h2>
-    <div id="rooms"></div>
-  </section>
-  <section style="margin-top:16px" id="detail" hidden>
-    <h2 id="dtitle"></h2>
-    <div class="row"><input id="say" placeholder="以講師身分發言" style="flex:1"> <button class="pri" onclick="say()">送出</button></div>
-    <div class="row">灌 <input id="floodn" type="number" value="300" min="1"> 則 <button onclick="act({action:'flood',room:sel,n:+$('floodn').value})">灌訊息</button></div>
-    <h2 style="margin-top:12px">已讀水位線</h2>
-    <table><tbody id="reads"></tbody></table>
-    <h2 style="margin-top:12px">最近 50 則</h2>
-    <div class="msgs" id="msgs"></div>
-  </section>
+
+<div class="lessons">
+  <div class="lessons-bar">
+    <span class="lessons-title">逐堂小抄</span>
+    <div class="ltabs" id="ltabs"></div>
+    <button class="xs" style="margin-left:auto" id="cheatToggle" onclick="toggleCheat()">收合</button>
+  </div>
+  <div class="lessons-detail" id="cheatBody"></div>
 </div>
-</main>
+
+<div class="desk">
+  <!-- 左欄：學員連線、搞破壞、重連時間軸 -->
+  <div class="pane">
+    <div class="block">
+      <div class="block-head">
+        <h2>學員連線與故障演練</h2>
+        <span class="block-sub" id="userCount">0 人</span>
+      </div>
+      <div class="stats" id="kpis"></div>
+      <div class="row">
+        <button class="fault" onclick="act({action:'drop',user:'@all'})" title="斷線並拒連 5 秒，2 秒後機器人偷發 3 句">全部踢斷 5 秒</button>
+        <button class="fault" onclick="act({action:'zombie',user:'@all'})" title="不斷線但 Server 不回封包（測心跳逾時）">全部設為假死</button>
+        <button onclick="act({action:'remove',user:'@offline'})" title="清除所有已離線的測試帳號與空私人房">清除離線</button>
+        <span class="mut" style="font-size:12.5px;margin-left:auto">拒絕秒數</span>
+        <input id="rejs" type="number" value="30" min="1" style="width:58px">
+      </div>
+      <table>
+        <thead><tr><th>學員</th><th>狀態</th><th>分配房間</th><th style="text-align:right">動作</th></tr></thead>
+        <tbody id="users"></tbody>
+      </table>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h2>重連時間軸</h2>
+        <span class="block-sub">最近 3 次踢斷（0–40 秒）</span>
+      </div>
+      <div id="tl" class="mut" style="font-size:12.5px">尚未觸發踢斷。按上方「全部踢斷 5 秒」即可對比有無 Jitter。</div>
+    </div>
+  </div>
+
+  <!-- 中欄：分房、拉群、房間列表 -->
+  <div class="pane">
+    <div class="block">
+      <div class="block-head">
+        <h2>分房模式</h2>
+        <span class="block-sub">L5–7 請固定「兩兩一組」</span>
+      </div>
+      <div class="row">
+        <button onclick="act({action:'assign',mode:'private'})">各自私人房</button>
+        <button onclick="act({action:'assign',mode:'pairs'})">兩兩一組 (L5–7)</button>
+        <button onclick="act({action:'assign',mode:'lobby'})">全班大廳</button>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h2>建立自訂群組</h2>
+        <span class="block-sub">L8 推送 room_added</span>
+      </div>
+      <div class="row">
+        <input id="gname" placeholder="群組名稱" value="活動群" style="flex:1;min-width:110px">
+        <button class="pri" onclick="mkGroup()">建立並拉人</button>
+        <button onclick="toggleAllGroup()">全選</button>
+      </div>
+      <div class="chips" id="gusers"></div>
+    </div>
+
+    <div class="block" style="flex:1">
+      <div class="block-head">
+        <h2>房間列表</h2>
+        <div class="row" style="margin:0">
+          <span class="block-sub" id="roomCount">0 間</span>
+          <button class="xs" onclick="floodPairs(300)" title="第 6 堂課前：替所有兩人組房間各灌 300 則">兩人房各灌 300 則</button>
+        </div>
+      </div>
+      <div id="rooms"></div>
+    </div>
+  </div>
+
+  <!-- 右欄：房間監看與操作 -->
+  <div class="pane" id="rightPane">
+    <div class="empty-inspector" id="emptyDetail">
+      <h3>選取一間房間開始操作</h3>
+      <p>點選中間任一房間後，即可在這裡以講師身分發言、灌入測試訊息、檢視最近 50 則對話，或調整學員的已讀水位線。</p>
+    </div>
+
+    <div id="detail" hidden>
+      <div class="inspector-head">
+        <h2 id="dtitle"></h2>
+        <span class="meta" id="dmeta"></span>
+      </div>
+
+      <div class="block">
+        <div class="block-head"><h2>發言與灌入測試訊息</h2></div>
+        <div class="row">
+          <input id="say" placeholder="以講師身分發言（按 Enter 送出）" style="flex:1" onkeydown="if(event.key==='Enter')say()">
+          <button class="pri" onclick="say()">送出</button>
+        </div>
+        <div class="row">
+          <span class="mut" style="font-size:12.5px">灌入</span>
+          <input id="floodn" type="number" value="300" min="1">
+          <button onclick="act({action:'flood',room:sel,n:+$('floodn').value})">灌訊息</button>
+          <button class="xs" onclick="$('floodn').value=50;act({action:'flood',room:sel,n:50})">+50</button>
+          <button class="xs" onclick="$('floodn').value=300;act({action:'flood',room:sel,n:300})">+300</button>
+          <button class="xs" onclick="$('floodn').value=1000;act({action:'flood',room:sel,n:1000})">+1000</button>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="block-head">
+          <h2>已讀水位線</h2>
+          <span class="block-sub">L9 強制調整測試用</span>
+        </div>
+        <table>
+          <thead><tr><th>成員</th><th>目前進度</th><th style="text-align:right">強制設定</th></tr></thead>
+          <tbody id="reads"></tbody>
+        </table>
+      </div>
+
+      <div class="block">
+        <div class="block-head"><h2>最近 50 則訊息</h2></div>
+        <div class="msgs" id="msgs"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="projModal" hidden onclick="if(event.target===this)this.hidden=true">
+  <div class="modal-card">
+    <div class="modal-kicker">Flutter 聊天室工作坊 — 學員連線資訊</div>
+    <div class="modal-ip" id="projIp">localhost<span>:8080</span></div>
+    <div class="modal-kicker" style="font-size:13.5px;margin-bottom:6px">WebSocket 連線網址</div>
+    <div class="modal-cmd" id="projWs" onclick="copyText(this.textContent,'已複製 WS 連線網址')"></div>
+    <div class="modal-kicker" style="font-size:13.5px;margin-bottom:6px">Flutter 啟動指令</div>
+    <div class="modal-cmd" id="projCmd" onclick="copyText(this.textContent,'已複製啟動指令')"></div>
+    <div class="modal-note">請連上教室同一個 Wi-Fi 區網。同一位學員開第二台模擬器請命名為 <code>名字-2</code>。</div>
+    <button class="btn-dark primary" style="padding:8px 18px;font-size:14px" onclick="$('projModal').hidden=true">關閉投影畫面 (Esc)</button>
+  </div>
+</div>
+
+<div class="ws-float" id="wsFloat" hidden>
+  <div class="wsf-head" id="wsfHead">
+    <span class="wsf-title">WS 連線測試 <span class="wsf-st" id="wsfSt">未連線</span></span>
+    <button class="wsf-hbtn" onclick="openWsTestTab()" title="另開獨立分頁（可開多視窗模擬多人）">新分頁</button>
+    <button class="wsf-hbtn" id="wsfMinBtn" onclick="minWsFloat()">縮小</button>
+    <button class="wsf-hbtn" onclick="$('wsFloat').hidden=true">關閉</button>
+  </div>
+  <div class="wsf-body">
+    <div class="wsf-conn">
+      <input id="wsfUrl" placeholder="ws://localhost:8080/ws?user=Web-1" onkeydown="if(event.key==='Enter')wsfToggleConn()">
+      <button class="pri xs" id="wsfConnBtn" onclick="wsfToggleConn()">連線</button>
+    </div>
+    <div class="wsf-send">
+      <div class="wsf-tpls">
+        <button class="xs" onclick="wsfFill('raw')">純文字</button>
+        <button class="xs" onclick="wsfFill('send')">JSON send</button>
+        <button class="xs" onclick="wsfFill('ping')">ping</button>
+        <button class="xs" onclick="wsfFill('read')">read</button>
+        <button class="xs" onclick="wsfFill('/delay')">/delay</button>
+        <button class="xs" onclick="wsfFill('/fail')">/fail</button>
+        <button class="xs" onclick="wsfFill('/drop')">/drop</button>
+        <button class="xs" onclick="wsfFill('/zombie')">/zombie</button>
+      </div>
+      <textarea id="wsfMsg" placeholder="輸入純文字或 JSON（Ctrl / Cmd + Enter 送出）"></textarea>
+      <div class="wsf-srow">
+        <button class="pri xs" onclick="wsfSend()">送出</button>
+        <span class="mut" id="wsfHint" style="font-size:11.5px">請先按「連線」</span>
+        <label style="font-size:11.5px;color:var(--muted);display:inline-flex;align-items:center;gap:4px;margin-left:auto;cursor:pointer">
+          <input type="checkbox" id="wsfPretty" checked onchange="wsfRenderLogs()"> 排版 JSON
+        </label>
+        <button class="xs" onclick="wsfLogs=[];wsfRenderLogs()">清空</button>
+      </div>
+    </div>
+    <div class="wsf-logs" id="wsfLogs">
+      <div class="mut" style="font-family:var(--sans);padding:12px 2px">貼上或確認上方 WS 網址後按「連線」，收到的訊息會即時顯示在這裡。</div>
+    </div>
+  </div>
+</div>
+
+<div class="help-modal" id="helpModal" hidden onclick="if(event.target===this)this.hidden=true">
+  <div class="help-card">
+    <div class="help-head">
+      <h2>控制台操作說明與名詞對照</h2>
+      <button class="xs" onclick="$('helpModal').hidden=true">關閉 (Esc)</button>
+    </div>
+    <div class="help-body">
+      <div class="help-sec">
+        <h3>1. 三種行為等級差在哪？</h3>
+        <div class="lv-grid">
+          <div class="lv-box">
+            <h4>純字串 (raw)</h4>
+            <div class="sub">第 1 堂前半</div>
+            <p>收到什麼純文字，就原封不動廣播給房間所有人（含發送者）。<b>不包 JSON、不推 room_added、不回 ACK。</b></p>
+          </div>
+          <div class="lv-box">
+            <h4>回音 (echo)</h4>
+            <div class="sub">第 1～3 堂</div>
+            <p>把訊息包成 JSON <code>message</code> 廣播給所有人（<b>包含發送者自己</b>），<b>不回 ACK</b>。用來練 JSON 解析，並在 L3 設延遲時讓學員體會「等自己回音很卡」。</p>
+          </div>
+          <div class="lv-box">
+            <h4>ACK (ack)</h4>
+            <div class="sub">第 4 堂起</div>
+            <p><code>message</code> <b>只廣播給其他人</b>，發送者改收到 <code>ack</code>（拿 <code>seq</code>）。搭配前端樂觀更新秒上屏與 <code>client_msg_id</code> 冪等去重。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="help-sec">
+        <h3>2. 故障演練按鈕與聊天室指令</h3>
+        <ul class="help-list">
+          <li><b>踢斷 5 秒 (/drop)</b>：踢斷連線並在 5 秒內拒絕重連（回 <code>503</code>），2 秒後機器人會在該房偷發 3 句。用來測 L2 重連時間軸（有無 Jitter 對比）與 L7 斷線補洞。</li>
+          <li><b>假死 (/zombie)</b>：不斷開 TCP，但 Server 裝死不回任何封包（含 <code>pong</code>），用來測 L2 Heartbeat 心跳逾時是否會主動斷線重連。</li>
+          <li><b>拒絕連線</b>：踢斷並在指定秒數內拒絕重連，模擬進電梯／長期離線（L5 離線秒開、L6/L7 補洞與 Outbox 補送）。</li>
+          <li><b>聊天室指令</b>：學員輸入 <code>/delay</code>（3 秒後才回 ACK）、<code>/fail</code>（照存照廣播但不回 ACK，測冪等）、<code>/drop</code>、<code>/zombie</code>。講師登入同名 App 可加對象如 <code>/drop Amy</code> 或 <code>/zombie @all</code>。</li>
+        </ul>
+      </div>
+
+      <div class="help-sec">
+        <h3>3. 分房模式與已讀水位線</h3>
+        <ul class="help-list">
+          <li><b>各自私人房 / 兩兩一組 / 全班大廳</b>：只搬動目前「在線」學員；L1–L7 未帶 <code>room_id</code> 的訊息會送到這裡分配的房間。<code>Amy</code> 與 <code>Amy-2</code> 會自動分進同一房。</li>
+          <li><b>⚠️ 第 5～7 堂不要換房</b>：此時學員本地 DB 尚未加入 <code>room_id</code>，請固定在「兩兩一組」。</li>
+          <li><b>自訂群組 (L8)</b>：勾選學員建立 <code>group:N</code>，即時推送 <code>room_added</code> 且不離開原分配房。</li>
+          <li><b>已讀水位線 (L9)</b>：學員端只能往前推；點選房間後可在右側強制將某人的已讀設回 <code>0</code> 或 <code>50</code>，立即推送 <code>read</code> 事件重測未讀紅點與進房定位。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let sel=null, st=null, picked=new Set();
+let sel=null, st=null, picked=new Set(), curIp='localhost', activeLesson=1, cheatOpen=false;
+
+const LESSONS=[
+  {n:1,t:'接通收發',lv:'純字串 → 回音',
+    op:'開場切「純字串」並按「各自私人房」。學員改送 JSON 後切「回音」，最後切「全班大廳」互傳。',
+    hook:'對一位學員按「假死」，讓大家看到連線正常卻收不到訊息，引出第 2 堂心跳。',
+    acts:[
+      {label:'① 課前：純字串 + 私人房',pri:1,fn:"runPreset([{action:'level',level:'raw'},{action:'delay',ms:0},{action:'assign',mode:'private'}],'已切到純字串並分私人房')"},
+      {label:'② 切到回音',fn:"act({action:'level',level:'echo'})"},
+      {label:'③ 切全班大廳',fn:"act({action:'assign',mode:'lobby'})"},
+      {label:'開 WS 測試視窗',fn:"toggleWsFloat()"}
+    ]},
+  {n:2,t:'心跳重連',lv:'回音 (L1–3)',
+    op:'學員自行輸入 <code>/zombie</code> 測 15 秒內自動重連。接著按「全部踢斷 5 秒」，用時間軸對比有無 Jitter。',
+    hook:'趁斷線 5 秒在大廳發言，連回後漏掉訊息，留伏筆到第 7 堂補洞。',
+    acts:[
+      {label:'課前：切到回音',pri:1,fn:"runPreset([{action:'level',level:'echo'},{action:'delay',ms:0}],'已切到回音模式')"},
+      {label:'全部踢斷 5 秒 (/drop @all)',danger:1,fn:"act({action:'drop',user:'@all'})"},
+      {label:'全部設為假死 (/zombie @all)',danger:1,fn:"act({action:'zombie',user:'@all'})"}
+    ]},
+  {n:3,t:'反轉列表',lv:'回音 (L1–3)',
+    op:'選取房間按「+1000」灌入訊息，測試反轉列表順暢度與「有新訊息」提示。',
+    hook:'上方全域延遲按「設為 2 秒」，感受送出卡頓，引出第 4 堂樂觀更新。',
+    acts:[
+      {label:'課前：切到回音',pri:1,fn:"act({action:'level',level:'echo'})"},
+      {label:'選取房灌 +1000 則',fn:"floodSelected(1000)"},
+      {label:'結尾鉤子：設延遲 2 秒',fn:"$('delay').value=2000;act({action:'delay',ms:2000});toast('全域延遲已設為 2000ms')"}
+    ]},
+  {n:4,t:'ACK 冪等',lv:'ACK (L4+)',
+    op:'開場切「ACK」，先保留 2 秒延遲示範秒上屏再按「歸零」。學員用 <code>/delay</code>、<code>/fail</code> 測重試去重。',
+    hook:'請學員殺掉 App 重開，對話全部清空，引出第 5 堂本地 DB。',
+    acts:[
+      {label:'① 開場：切 ACK + 維持 2s 延遲',pri:1,fn:"$('delay').value=2000;runPreset([{action:'level',level:'ack'},{action:'delay',ms:2000}],'已切到 ACK（延遲 2 秒）')"},
+      {label:'② 示範完：延遲歸零',fn:"$('delay').value=0;act({action:'delay',ms:0});toast('延遲已歸零')"}
+    ]},
+  {n:5,t:'本地 DB',lv:'ACK (L4+)',
+    op:'課前按「兩兩一組」，第 5～7 堂固定不換房。驗收時對學員按「拒絕」30 秒，重開 App 確認離線秒開。',
+    hook:'刪掉 App 重裝模擬換新手機，畫面變空白，引出第 6 堂歷史分頁。',
+    acts:[
+      {label:'課前：切 ACK + 兩兩一組',pri:1,fn:"runPreset([{action:'level',level:'ack'},{action:'delay',ms:0},{action:'assign',mode:'pairs'}],'已切到 ACK 並兩兩分組')"}
+    ]},
+  {n:6,t:'歷史分頁',lv:'ACK (L4+)',
+    op:'課前按「兩人房各灌 300 則」。學員重裝進房應載入最新 50 則，往上滑無縫載入更舊訊息。',
+    hook:'對某學員按「拒絕」30 秒，請夥伴傳 3 句，解封後漏訊，引出第 7 堂補洞。',
+    acts:[
+      {label:'課前：兩人房各灌 300 則',pri:1,fn:"floodPairs(300)"}
+    ]},
+  {n:7,t:'補洞補送',lv:'ACK (L4+)',
+    op:'學員輸入 <code>/drop</code> 驗證自動補回機器人 3 句；再「拒絕」30 秒期間送 3 則，解封後自動依序補送。',
+    hook:'建立自訂群組拉 3 人，學員還沒有房間列表看不到，引出第 8 堂。',
+    acts:[
+      {label:'確認切到 ACK',pri:1,fn:"act({action:'level',level:'ack'})"},
+      {label:'全部踢斷 5 秒 (/drop @all)',danger:1,fn:"act({action:'drop',user:'@all'})"}
+    ]},
+  {n:8,t:'房間列表',lv:'ACK (L4+)',
+    op:'解除換房限制。勾選學員按「建立並拉人」，確認列表即時跳出新群組；學員間互開私聊。',
+    hook:'提問「怎麼知道對方讀了沒」，引出第 9 堂已讀水位線。',
+    acts:[
+      {label:'確認切到 ACK',pri:1,fn:"act({action:'level',level:'ack'})"},
+      {label:'全選在線學員（準備拉群）',fn:"toggleAllGroup()"}
+    ]},
+  {n:9,t:'已讀未讀',lv:'ACK (L4+)',
+    op:'點選房間觀察水位線隨捲動前進。將學員水位線設回 50 再按「+300」，驗證未讀 300 與進房定位。',
+    hook:'全部功能完成，進入第 10 堂系統設計研討會。',
+    acts:[
+      {label:'選取房灌 +300 則',pri:1,fn:"floodSelected(300)"},
+      {label:'選取房全員已讀歸零',fn:"resetSelectedReads(0)"}
+    ]}
+];
+
+async function runPreset(actions,msg){
+  for(const a of actions){await fetch('/admin/action',{method:'POST',body:JSON.stringify(a)});}
+  toast(msg);tick();
+}
+function floodSelected(n){
+  if(!sel)return toast('請先在中間「房間列表」點選一間房間');
+  act({action:'flood',room:sel,n});toast(`已對 ${sel} 灌入 ${n} 則訊息`);
+}
+async function resetSelectedReads(seq){
+  const room=st?.rooms?.find(r=>r.id===sel);
+  if(!room)return toast('請先在中間「房間列表」點選一間房間');
+  for(const m of room.members){await fetch('/admin/action',{method:'POST',body:JSON.stringify({action:'read',room:sel,user:m,seq})});}
+  toast(`已將 ${room.name} 全員已讀設為 ${seq}`);tick();
+}
+
+function renderCheat(){
+  $('ltabs').innerHTML=LESSONS.map(l=>`<button class="ltab ${l.n===activeLesson?'sel':''}" onclick="pickLesson(${l.n})">L${l.n} ${l.t}</button>`).join('');
+  const l=LESSONS.find(x=>x.n===activeLesson);
+  $('cheatBody').hidden=!cheatOpen;
+  $('cheatToggle').textContent=cheatOpen?'收合':'展開';
+  const btns=(l.acts||[]).map(a=>`<button class="xs ${a.pri?'pri':a.danger?'fault':''}" onclick="${a.fn}">${a.label}</button>`).join('');
+  $('cheatBody').innerHTML=`
+    <div class="ld-col"><h4>建議等級</h4><p><span class="kind lobby">${l.lv}</span></p></div>
+    <div class="ld-col"><h4>課前與課中操作</h4><p>${l.op}</p><div class="ld-acts">${btns}</div></div>
+    <div class="ld-col"><h4>結尾鉤子</h4><p>${l.hook}</p></div>`;
+}
+function pickLesson(n){
+  if(activeLesson===n&&cheatOpen){cheatOpen=false;}
+  else{activeLesson=n;cheatOpen=true;}
+  renderCheat();
+}
+function toggleCheat(){cheatOpen=!cheatOpen;renderCheat();}
+function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('show'),1700);}
+function copyText(text,msg){navigator.clipboard?.writeText(text);toast(msg||('已複製：'+text));}
+function syncConnText(){
+  const port=st?.port||8080;
+  $('wsurl').textContent=`ws://${curIp}:${port}/ws?user=名字`;
+  $('runcmd').textContent=`flutter run --dart-define=USER=名字 --dart-define=HOST=${curIp}`;
+}
+function setIp(ip){
+  curIp=ip;
+  syncConnText();
+  copyText(ip,`已複製 IP：${ip}`);
+  tick();
+}
+function openProj(){
+  const port=st?.port||8080;
+  $('projIp').innerHTML=`${esc(curIp)}<span>:${esc(port)}</span>`;
+  $('projWs').textContent=$('wsurl').textContent;
+  $('projCmd').textContent=$('runcmd').textContent;
+  $('projModal').hidden=false;
+}
+function defaultWsTestUrl(){
+  const host=(location.hostname==='localhost'||location.hostname==='127.0.0.1')?location.host:`${curIp}:${st?.port||8080}`;
+  const tag=Math.random().toString(36).slice(2,5);
+  return `ws://${host}/ws?user=Web-${tag}`;
+}
+function openWsTestTab(){
+  const u=$('wsfUrl').value.trim()||defaultWsTestUrl();
+  window.open('/ws-test?url='+encodeURIComponent(u),'_blank');
+}
+function toggleWsFloat(){
+  const box=$('wsFloat');
+  if(!$('wsfUrl').value)$('wsfUrl').value=defaultWsTestUrl();
+  if(box.hidden){box.hidden=false;box.classList.remove('min');$('wsfMinBtn').textContent='縮小';}
+  else if(box.classList.contains('min')){box.classList.remove('min');$('wsfMinBtn').textContent='縮小';}
+  else box.hidden=true;
+}
+function minWsFloat(){
+  const m=$('wsFloat').classList.toggle('min');
+  $('wsfMinBtn').textContent=m?'展開':'縮小';
+}
+
+// Floating WS Client State
+let wsfSock=null, wsfLogs=[];
+function wsfSetState(cls,text,connected){
+  const s=$('wsfSt');s.className='wsf-st '+cls;s.textContent=text;
+  const ing=cls==='ing';
+  const b=$('wsfConnBtn');
+  b.textContent=connected?'斷線':ing?'取消':'連線';
+  b.className=(connected||ing)?'fault xs':'pri xs';
+  $('wsfHint').textContent=connected?'已連線，可送出':ing?'連線中…':'請先按「連線」';
+  $('wsfUrl').disabled=connected||ing;
+}
+function wsfNow(){const d=new Date();return d.toTimeString().slice(0,8)+'.'+String(d.getMilliseconds()).padStart(3,'0');}
+function wsfBytes(s){return new Blob([s]).size;}
+function wsfFmt(raw){if(!$('wsfPretty').checked)return raw;try{return JSON.stringify(JSON.parse(raw),null,2);}catch(_){return raw;}}
+function wsfAddLog(dir,label,raw,meta){wsfLogs.push({t:wsfNow(),dir,label,raw,meta:meta||''});if(wsfLogs.length>200)wsfLogs.shift();wsfRenderLogs();}
+function wsfRenderLogs(){
+  const box=$('wsfLogs');
+  if(!wsfLogs.length){box.innerHTML='<div class="mut" style="font-family:var(--sans);padding:12px 2px">尚無收發紀錄。</div>';return;}
+  box.innerHTML=wsfLogs.map(l=>`<div class="wsf-entry"><div class="wsf-emeta"><span class="wsf-dir ${l.dir}">${esc(l.label)}</span><span>${l.t}</span>${l.meta?`<span>${esc(l.meta)}</span>`:''}</div><pre class="wsf-pre">${esc(wsfFmt(l.raw))}</pre></div>`).join('');
+  box.scrollTop=box.scrollHeight;
+}
+function wsfToggleConn(){
+  if(wsfSock&&(wsfSock.readyState===WebSocket.OPEN||wsfSock.readyState===WebSocket.CONNECTING)){wsfSock.close(1000,'manual close');return;}
+  const url=$('wsfUrl').value.trim();
+  if(!url)return toast('請先輸入 WS 網址');
+  wsfSetState('ing','連線中',false);
+  wsfAddLog('sys','CONNECT',url,'HTTP Upgrade 握手中');
+  try{wsfSock=new WebSocket(url);}catch(e){wsfSetState('err','網址錯誤',false);wsfAddLog('err','error',String(e));return;}
+  wsfSock.onopen=()=>{wsfSetState('on','已連線',true);wsfAddLog('sys','open 事件',JSON.stringify({event:'open',readyState:wsfSock.readyState,url:wsfSock.url,protocol:wsfSock.protocol||'(none)'}),'101 Switching Protocols');};
+  wsfSock.onmessage=e=>{
+    const isTxt=typeof e.data==='string';
+    const raw=isTxt?e.data:'[Binary]';
+    wsfAddLog('rx','message 事件',raw,`${isTxt?'Text Frame':'Binary Frame'} · ${isTxt?wsfBytes(raw):e.data.size||0} bytes`);
+  };
+  wsfSock.onerror=()=>wsfAddLog('err','error 事件','WebSocket 發生錯誤（請檢查 IP、Server 或 ?user= 是否同名已在線）');
+  wsfSock.onclose=e=>{
+    wsfSetState('','已斷線',false);
+    wsfAddLog('sys','close 事件',JSON.stringify({event:'close',code:e.code,reason:e.reason||'',wasClean:e.wasClean}));
+    wsfSock=null;
+  };
+}
+function wsfSend(){
+  if(!wsfSock||wsfSock.readyState!==WebSocket.OPEN){wsfAddLog('err','提示','尚未連線，請先按上方「連線」按鈕');$('wsfConnBtn').focus();return;}
+  const text=$('wsfMsg').value;
+  if(!text.trim()){wsfAddLog('err','提示','請先輸入訊息或點上方快捷範本');$('wsfMsg').focus();return;}
+  wsfSock.send(text);
+  wsfAddLog('tx','send 送出',text,`Text Frame · ${wsfBytes(text)} bytes`);
+}
+function wsfFill(kind){
+  const id='web-'+Math.random().toString(36).slice(2,10);
+  if(kind==='raw')$('wsfMsg').value='hello from browser';
+  else if(kind==='send')$('wsfMsg').value=JSON.stringify({type:'send',client_msg_id:id,text:'哈囉'},null,2);
+  else if(kind==='ping')$('wsfMsg').value=JSON.stringify({type:'ping'});
+  else if(kind==='read')$('wsfMsg').value=JSON.stringify({type:'read',room_id:sel||'lobby',seq:1},null,2);
+  else $('wsfMsg').value=JSON.stringify({type:'send',client_msg_id:id,text:kind},null,2);
+  $('wsfMsg').focus();
+}
+$('wsfMsg').addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();wsfSend();}});
+
+// Drag floating window by header
+(()=>{
+  let dx=0,dy=0,dragging=false;
+  const box=$('wsFloat'), head=$('wsfHead');
+  head.addEventListener('mousedown',e=>{
+    if(e.target.closest('button'))return;
+    dragging=true;
+    const r=box.getBoundingClientRect();
+    box.style.left=r.left+'px';box.style.top=r.top+'px';box.style.right='auto';box.style.bottom='auto';
+    dx=e.clientX-r.left;dy=e.clientY-r.top;
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!dragging)return;
+    const x=Math.max(8,Math.min(window.innerWidth-120,e.clientX-dx));
+    const y=Math.max(8,Math.min(window.innerHeight-44,e.clientY-dy));
+    box.style.left=x+'px';box.style.top=y+'px';
+  });
+  document.addEventListener('mouseup',()=>{dragging=false;});
+})();
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('projModal').hidden=true;$('helpModal').hidden=true;}});
+
 async function act(body){await fetch('/admin/action',{method:'POST',body:JSON.stringify(body)});tick();}
 function say(){const t=$('say').value.trim();if(!t)return;act({action:'say',room:sel,text:t});$('say').value='';}
-function mkGroup(){if(!picked.size)return alert('先勾選學員');act({action:'group',name:$('gname').value||'群組',users:[...picked]});picked.clear();}
+function mkGroup(){if(!picked.size)return alert('請先勾選要加入群組的在線學員');act({action:'group',name:$('gname').value||'群組',users:[...picked]});picked.clear();toast('已建立群組並推送通知');}
+function toggleAllGroup(){
+  const online=(st?.users||[]).filter(u=>u.online).map(u=>u.name);
+  if(online.length&&online.every(u=>picked.has(u)))picked.clear();else online.forEach(u=>picked.add(u));
+  tick();
+}
+async function floodPairs(n){
+  const pairs=(st?.rooms||[]).filter(r=>r.kind==='pair');
+  if(!pairs.length)return alert('目前沒有兩人組房間，請先按「兩兩一組」分房');
+  for(const r of pairs){await fetch('/admin/action',{method:'POST',body:JSON.stringify({action:'flood',room:r.id,n})});}
+  toast(`已替 ${pairs.length} 個兩人房各灌入 ${n} 則訊息`);tick();
+}
 document.querySelectorAll('[data-lv]').forEach(b=>b.onclick=()=>act({action:'level',level:b.dataset.lv}));
+
+const _prevHtml={};
+function setHtml(id,html){
+  if(_prevHtml[id]===html)return false;
+  _prevHtml[id]=html;
+  $(id).innerHTML=html;
+  return true;
+}
+
+function patchUsers(users){
+  const tbody=$('users');
+  if(!users.length){
+    setHtml('users','<tr><td colspan="4" class="mut" style="padding:16px 6px">尚無學員連線。點上方「投影給同學」顯示連線 IP。</td></tr>');
+    return;
+  }
+  const emptyRow=tbody.querySelector('td[colspan]');
+  if(emptyRow){_prevHtml['users']=null;tbody.innerHTML='';}
+
+  const byName=new Map();
+  for(const tr of tbody.children)if(tr.dataset.u)byName.set(tr.dataset.u,tr);
+
+  const wanted=new Set(users.map(u=>u.name));
+  for(const [name,tr] of byName){if(!wanted.has(name))tr.remove();}
+
+  users.forEach((u,idx)=>{
+    const cls=u.blocked_s?'bl':u.zombie?'zb':u.online?'on':'off';
+    const label=u.blocked_s?`拒絕 ${u.blocked_s}s`:u.zombie?'假死':u.online?'在線':'離線';
+    const stHtml=`<span class="st-tag ${cls}"><i class="dot ${cls==='off'?'':cls}"></i>${label}</span>`;
+    const roomStr=u.room||'—';
+    let tr=byName.get(u.name);
+    if(!tr){
+      tr=document.createElement('tr');
+      tr.dataset.u=u.name;
+      tr.innerHTML=`<td><b>${esc(u.name)}</b></td><td>${stHtml}</td><td class="room-cell" title="${esc(roomStr)}">${esc(roomStr)}</td>
+        <td><div class="acts">
+          <button class="fault xs" data-a="drop" data-u="${esc(u.name)}" title="踢斷 5 秒並由機器人補發 3 句">踢斷</button>
+          <button class="fault xs" data-a="zombie" data-u="${esc(u.name)}" title="連線不關但 Server 不回應">假死</button>
+          <button class="xs" data-a="reject" data-u="${esc(u.name)}" title="踢斷並依拒絕秒數阻擋重連">拒絕</button>
+          <button class="xs" data-a="remove" data-u="${esc(u.name)}" title="斷開連線並從名單與房間移除">移除</button>
+        </div></td>`;
+      tr.dataset.st=`${cls}:${label}`;
+      tr.dataset.rm=roomStr;
+    }else{
+      const stKey=`${cls}:${label}`;
+      if(tr.dataset.st!==stKey){tr.children[1].innerHTML=stHtml;tr.dataset.st=stKey;}
+      if(tr.dataset.rm!==roomStr){tr.children[2].textContent=roomStr;tr.children[2].title=roomStr;tr.dataset.rm=roomStr;}
+    }
+    if(tbody.children[idx]!==tr)tbody.insertBefore(tr,tbody.children[idx]||null);
+  });
+}
+
 async function tick(){
   st=await (await fetch('/admin/state'+(sel?'?room='+encodeURIComponent(sel):''))).json();
-  $('adm').textContent='講師：'+(st.admin||'（未設定 --admin）');
+  $('adm').textContent=st.admin?`講師：${st.admin}`:'未設定 --admin';
+  const ips=st.ips&&st.ips.length?st.ips:['localhost'];
+  if(curIp==='localhost'&&ips[0]!=='localhost'){
+    curIp=ips[0];
+  }
+  syncConnText();
+  setHtml('ips',ips.map(ip=>`<button class="ippill ${ip===curIp?'active':''}" onclick="setIp('${esc(ip)}')" title="點擊複製並套用至指令">${esc(ip)}</button>`).join(''));
   document.querySelectorAll('[data-lv]').forEach(b=>b.classList.toggle('sel',b.dataset.lv===st.level));
   if(document.activeElement!==$('delay'))$('delay').value=st.delay_ms;
-  $('users').innerHTML=st.users.map(u=>{
-    const cls=u.blocked_s?'bl':u.zombie?'zb':u.online?'on':'';
-    const state=u.blocked_s?`拒絕中 ${u.blocked_s}s`:u.zombie?'zombie':u.online?'':'離線';
-    return `<tr><td><span class="dot ${cls}"></span></td><td>${esc(u.name)} <span class="mut">${state}</span></td><td class="mut">${esc(u.room||'')}</td>
-    <td><button class="danger" data-a="drop" data-u="${esc(u.name)}">/drop</button> <button class="danger" data-a="zombie" data-u="${esc(u.name)}">/zombie</button>
-    <button data-a="reject" data-u="${esc(u.name)}">拒絕連線</button></td></tr>`}).join('');
-  $('gusers').innerHTML=st.users.filter(u=>u.online).map(u=>`<label><input type="checkbox" data-g="${esc(u.name)}" ${picked.has(u.name)?'checked':''}> ${esc(u.name)}</label>`).join(' ')||'<span class="mut">沒有在線學員</span>';
-  $('rooms').innerHTML=st.rooms.map(r=>`<div class="room ${r.id===sel?'sel':''}" data-r="${esc(r.id)}"><b>${esc(r.name)}</b> <span class="mut">${esc(r.id)} · 最新 seq ${r.last_seq}</span><br>
-    ${r.members.map(m=>{const u=st.users.find(x=>x.name===m);return `<span class="dot ${u&&u.online?'on':''}"></span>${esc(m)}`}).join(' ')}</div>`).join('')||'<span class="mut">還沒有房間（學員連線後自動進私人房）</span>';
+
+  const onC=st.users.filter(u=>u.online&&!u.zombie&&!u.blocked_s).length;
+  const zbC=st.users.filter(u=>u.zombie).length;
+  const blC=st.users.filter(u=>u.blocked_s).length;
+  const offC=st.users.filter(u=>!u.online&&!u.blocked_s).length;
+  $('userCount').textContent=`${onC+zbC} 在線 / ${st.users.length} 人`;
+  setHtml('kpis',`
+    <span><i class="dot on"></i>在線 <b>${onC}</b></span>
+    <span><i class="dot zb"></i>假死 <b>${zbC}</b></span>
+    <span><i class="dot bl"></i>拒絕中 <b>${blC}</b></span>
+    <span><i class="dot"></i>離線 <b>${offC}</b></span>`);
+
+  patchUsers(st.users);
+
+  setHtml('gusers',st.users.filter(u=>u.online).map(u=>`<label class="chip"><input type="checkbox" data-g="${esc(u.name)}" ${picked.has(u.name)?'checked':''}>${esc(u.name)}</label>`).join('')||'<span class="mut" style="font-size:12.5px">目前沒有在線學員可勾選</span>');
+
+  $('roomCount').textContent=`${st.rooms.length} 間`;
+  setHtml('rooms',st.rooms.length?`<div class="room-list">${st.rooms.map(r=>`
+    <div class="room ${r.id===sel?'sel':''}" data-r="${esc(r.id)}">
+      <div class="room-top">
+        <span class="room-name">${esc(r.name)}</span>
+        <span class="room-seq">#${r.last_seq}</span>
+      </div>
+      <div class="room-sub"><span class="kind ${esc(r.kind)}">${esc(r.kind)}</span><span class="room-id">${esc(r.id)}</span></div>
+      <div class="room-members">
+        ${r.members.map(m=>{const u=st.users.find(x=>x.name===m);return `<span class="rm"><i class="dot ${u&&u.online?'on':''}"></i>${esc(m)}</span>`}).join('')}
+      </div>
+    </div>`).join('')}</div>`:'<div class="mut" style="font-size:12.5px;padding:8px 0">還沒有房間。學員連上後會自動建立私人房。</div>');
+
   const room=st.rooms.find(r=>r.id===sel);
+  $('emptyDetail').hidden=!!room;
   $('detail').hidden=!room;
   if(room){
-    $('dtitle').textContent=room.name+'（'+room.id+'）';
+    $('dtitle').textContent=room.name;
+    $('dmeta').textContent=`${room.id}  最新 #${room.last_seq}`;
     const focused=document.activeElement&&document.activeElement.dataset.rd;
-    if(!focused)$('reads').innerHTML=room.members.map(m=>`<tr><td>${esc(m)}</td><td>讀到 <b>${room.reads[m]||0}</b> / ${room.last_seq}</td>
-      <td><input type="number" min="0" data-rd="${esc(m)}" placeholder="seq"> <button data-a="setread" data-u="${esc(m)}">設定</button></td></tr>`).join('');
+    if(!focused)setHtml('reads',room.members.map(m=>{
+      const cur=room.reads[m]||0, unread=Math.max(0,room.last_seq-cur);
+      const pct=room.last_seq?Math.round(cur/room.last_seq*100):100;
+      return `<tr>
+        <td><b>${esc(m)}</b></td>
+        <td>
+          <div style="font-size:12.5px;font-variant-numeric:tabular-nums"><b>#${cur}</b> / ${room.last_seq} <span class="mut">（未讀 ${unread}）</span></div>
+          <div class="prog"><i style="width:${pct}%"></i></div>
+        </td>
+        <td><div class="acts">
+          <input type="number" min="0" max="${room.last_seq}" data-rd="${esc(m)}" placeholder="seq" style="width:60px">
+          <button class="xs" data-a="setread" data-u="${esc(m)}">設定</button>
+          <button class="xs" onclick="act({action:'read',room:sel,user:'${esc(m)}',seq:0})">歸零</button>
+        </div></td></tr>`;
+    }).join(''));
     const box=$('msgs'),atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-4;
-    box.innerHTML=st.messages.map(m=>`<div><span class="seq">#${m.seq}</span><b>${esc(m.sender)}</b>：${esc(m.text)}</div>`).join('')||'<span class="mut">沒有訊息</span>';
-    if(atBottom)box.scrollTop=box.scrollHeight;
+    if(setHtml('msgs',st.messages.map(m=>`<div class="msg-item"><span class="seq">#${m.seq}</span><span class="sender">${esc(m.sender)}</span><span class="msg-text">${esc(m.text)}</span></div>`).join('')||'<div class="mut" style="padding:12px;text-align:center">這間房還沒有訊息</div>')&&atBottom){
+      box.scrollTop=box.scrollHeight;
+    }
   }
   drawTimeline(st.timeline);
 }
+
 function drawTimeline(rounds){
   if(!rounds.length)return;
-  const W=560,X=s=>40+s/40000*(W-50);
-  $('tl').innerHTML=rounds.map((d,i)=>{
-    const users=[...new Set(d.users)];const H=20+users.length*14;
-    const ticks=[0,5,10,15,20,25,30,35,40].map(s=>`<line x1="${X(s*1000)}" x2="${X(s*1000)}" y1="10" y2="${H-6}" stroke="#e3e6ec"/><text x="${X(s*1000)}" y="${H+6}" font-size="10" fill="#6b7385" text-anchor="middle">${s}s</text>`).join('');
-    const dots=d.attempts.map(a=>`<circle cx="${X(a.dt)}" cy="${16+users.indexOf(a.user)*14}" r="4" fill="${a.result==='ok'?'#1a9a5b':'#d64545'}"><title>${esc(a.user)} ${(a.dt/1000).toFixed(2)}s ${a.result}</title></circle>`).join('');
-    const names=users.map((u,j)=>`<text x="0" y="${20+j*14}" font-size="10" fill="#6b7385">${esc(u).slice(0,6)}</text>`).join('');
-    return `<div class="mut">${new Date(d.t).toLocaleTimeString()} · ${esc(d.by)} 踢了 ${users.length} 人</div><svg width="100%" viewBox="0 0 ${W} ${H+10}">${ticks}${names}${dots}</svg>`}).join('');
+  const W=520,X=s=>46+s/40000*(W-58);
+  setHtml('tl',rounds.map(d=>{
+    const users=[...new Set(d.users)];const H=22+users.length*16;
+    const ticks=[0,5,10,15,20,25,30,35,40].map(s=>`<line x1="${X(s*1000)}" x2="${X(s*1000)}" y1="8" y2="${H-6}" stroke="${s===5?'#c82333':'#dcdcd6'}" stroke-dasharray="${s===5?'3,2':''}"/><text x="${X(s*1000)}" y="${H+7}" font-size="10" fill="${s===5?'#c82333':'#5c6068'}" text-anchor="middle">${s}s</text>`).join('');
+    const dots=d.attempts.map(a=>`<circle cx="${X(a.dt)}" cy="${16+users.indexOf(a.user)*16}" r="4" fill="${a.result==='ok'?'#15803d':'#c82333'}" stroke="#fff" stroke-width="1"><title>${esc(a.user)} ${(a.dt/1000).toFixed(2)}s (${a.result})</title></circle>`).join('');
+    const names=users.map((u,j)=>`<text x="0" y="${20+j*16}" font-size="10.5" fill="#16171a" font-weight="500">${esc(u).slice(0,7)}</text>`).join('');
+    return `<div style="margin-top:8px"><div class="mut" style="font-size:12px;margin-bottom:2px">${new Date(d.t).toLocaleTimeString()} ${esc(d.by)} 踢斷 ${users.length} 人</div><svg width="100%" viewBox="0 0 ${W} ${H+12}">${ticks}${names}${dots}</svg></div>`;
+  }).join(''));
 }
+
 document.addEventListener('click',e=>{
   const t=e.target;
   if(t.dataset.g!==undefined){t.checked?picked.add(t.dataset.g):picked.delete(t.dataset.g);return;}
@@ -760,5 +1683,282 @@ document.addEventListener('click',e=>{
   else if(a==='setread'){const i=document.querySelector(`[data-rd="${CSS.escape(u)}"]`);act({action:'read',room:sel,user:u,seq:+i.value});i.value='';i.blur();}
   else act({action:a,user:u});
 });
+renderCheat();
 tick();setInterval(tick,1000);
+</script></body></html>''';
+
+// ───────────────────────── WS 測試頁面（/ws-test）─────────────────────────
+
+const _wsTestHtml = r'''<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WS 連線測試 · Flutter 聊天室工作坊</title>
+<style>
+:root{
+  --ground:#f6f6f4;--panel:#ffffff;--well:#efefe9;--ink:#16171a;--muted:#5c6068;
+  --rule:#dcdcd6;--rule-soft:#ecece6;
+  --cobalt:#1b4fd8;--cobalt-hover:#1640b0;--cobalt-tint:#edf2ff;--cobalt-ring:#bfd0ff;
+  --fault:#c82333;--fault-tint:#fdf2f3;--fault-rule:#f3c4c9;
+  --ok:#15803d;--ok-tint:#eefaf2;
+  --warn:#a16207;--warn-tint:#fef9ec;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang TC","Noto Sans TC",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;font:13.5px/1.5 var(--sans);background:var(--ground);color:var(--ink);
+  -webkit-font-smoothing:antialiased;display:flex;flex-direction:column;
+}
+:focus-visible{outline:2px solid var(--cobalt);outline-offset:1px}
+
+header{
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--rule);flex-shrink:0;
+}
+header h1{font-size:15px;font-weight:700;margin:0;letter-spacing:-.01em}
+.back{font-size:12.5px;color:var(--cobalt);text-decoration:none;font-weight:500}
+.back:hover{text-decoration:underline}
+.status{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;padding:3px 10px;border-radius:4px;background:var(--well);color:var(--muted)}
+.status.on{background:var(--ok-tint);color:var(--ok)}
+.status.ing{background:var(--warn-tint);color:var(--warn)}
+.status.err{background:var(--fault-tint);color:var(--fault)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
+
+.connbar{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:10px 18px;background:var(--ink);border-bottom:1px solid #000;flex-shrink:0;
+}
+.connbar label{font-size:12.5px;color:#a3a7b0;font-weight:500}
+.url-in{
+  flex:1;min-width:260px;font-family:var(--mono);font-size:13px;
+  padding:6px 10px;border-radius:5px;border:1px solid #3c404a;background:#0d0e11;color:#fff;
+}
+.url-in:focus{border-color:#7ea2ff;outline:none}
+
+button{
+  font:inherit;font-size:12.5px;font-weight:500;padding:5px 12px;border-radius:5px;
+  border:1px solid var(--rule);background:var(--panel);color:var(--ink);cursor:pointer;
+}
+button:hover{background:var(--well);border-color:#bdbdb6}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.pri{background:var(--cobalt);border-color:var(--cobalt);color:#fff}
+button.pri:hover:not(:disabled){background:var(--cobalt-hover);border-color:var(--cobalt-hover)}
+button.fault{background:var(--fault);border-color:var(--fault);color:#fff}
+button.fault:hover:not(:disabled){background:#a81c29}
+button.xs{padding:3px 8px;font-size:12px}
+
+.desk{flex:1;min-height:0;display:grid;grid-template-columns:minmax(320px,0.9fr) minmax(380px,1.3fr)}
+.pane{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid var(--rule);overflow-y:auto}
+.pane:last-child{border-right:none;background:var(--panel)}
+
+.block{padding:16px 18px;border-bottom:1px solid var(--rule)}
+.block:last-child{border-bottom:none}
+.block-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.block-head h2{font-size:14px;font-weight:700;margin:0}
+.mut{color:var(--muted);font-size:12.5px}
+
+textarea{
+  width:100%;min-height:130px;resize:vertical;font-family:var(--mono);font-size:13px;line-height:1.5;
+  padding:10px;border:1px solid var(--rule);border-radius:5px;background:var(--panel);color:var(--ink);
+}
+textarea:focus{border-color:var(--cobalt);outline:none;box-shadow:0 0 0 2px var(--cobalt-ring)}
+
+.tpls{display:flex;gap:5px;flex-wrap:wrap;margin:8px 0 12px}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+
+.log-head{
+  padding:12px 18px;border-bottom:1px solid var(--rule);background:var(--panel);
+  display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;flex-shrink:0;
+}
+.log-head h2{font-size:14px;font-weight:700;margin:0}
+.log-list{flex:1;overflow-y:auto;padding:10px 18px;font-family:var(--mono);font-size:12.5px}
+.log-empty{color:var(--muted);font-family:var(--sans);font-size:13px;padding:24px 0}
+.entry{padding:8px 0;border-bottom:1px solid var(--rule-soft)}
+.entry:last-child{border-bottom:none}
+.entry-meta{display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:11.5px;color:var(--muted)}
+.dir{font-family:var(--sans);font-weight:600;padding:1px 6px;border-radius:3px;font-size:11.5px}
+.dir.tx{background:var(--cobalt-tint);color:var(--cobalt)}
+.dir.rx{background:var(--ok-tint);color:var(--ok)}
+.dir.sys{background:var(--well);color:var(--muted)}
+.dir.err{background:var(--fault-tint);color:var(--fault)}
+.payload{margin:0;white-space:pre-wrap;word-break:break-word;color:var(--ink);font-family:var(--mono);font-size:12.5px;line-height:1.45}
+
+@media(max-width:840px){
+  .desk{grid-template-columns:1fr}
+  .pane{border-right:none;border-bottom:1px solid var(--rule);overflow:visible}
+}
+</style></head><body>
+
+<header>
+  <h1>WebSocket 連線測試</h1>
+  <a class="back" href="/admin">返回講師控制台</a>
+  <span class="status" id="st"><i class="dot"></i><span id="stText">未連線</span></span>
+</header>
+
+<div class="connbar">
+  <label for="url">WS 網址</label>
+  <input class="url-in" id="url" placeholder="ws://localhost:8080/ws?user=Tester" onkeydown="if(event.key==='Enter')toggleConn()">
+  <button class="pri" id="connBtn" onclick="toggleConn()">連線</button>
+</div>
+
+<div class="desk">
+  <div class="pane">
+    <div class="block">
+      <div class="block-head">
+        <h2>送出訊息</h2>
+        <span class="mut">Ctrl / Cmd + Enter 快速送出</span>
+      </div>
+      <div class="mut" style="margin-bottom:6px">快捷範本（點擊填入，可直接修改）</div>
+      <div class="tpls">
+        <button class="xs" onclick="fill('raw')">純文字</button>
+        <button class="xs" onclick="fill('send')">JSON send</button>
+        <button class="xs" onclick="fill('ping')">ping</button>
+        <button class="xs" onclick="fill('read')">read</button>
+        <button class="xs" onclick="fill('/delay')">/delay</button>
+        <button class="xs" onclick="fill('/fail')">/fail</button>
+        <button class="xs" onclick="fill('/drop')">/drop</button>
+        <button class="xs" onclick="fill('/zombie')">/zombie</button>
+      </div>
+      <textarea id="msg" placeholder="輸入純文字或 JSON，例如：hello 或 {&quot;type&quot;:&quot;send&quot;,&quot;text&quot;:&quot;hi&quot;}"></textarea>
+      <div class="row">
+        <button class="pri" id="sendBtn" onclick="sendMsg()">送出</button>
+        <span class="mut" id="sendHint">尚未連線（請先按上方「連線」）</span>
+        <label style="font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin-left:auto">
+          <input type="checkbox" id="pretty" checked onchange="rerender()"> 自動排版 JSON
+        </label>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="block-head"><h2>使用說明</h2></div>
+      <div class="mut" style="line-height:1.65">
+        1. 上方貼入或修改 WS 網址（可改 <code>?user=</code> 換名字，或開兩個分頁模擬兩人對話）。<br>
+        2. 按「連線」，右側會即時顯示收到的純文字或 JSON（如 <code>message</code>、<code>ack</code>、<code>pong</code>、<code>room_added</code>、<code>read</code>）。<br>
+        3. 第 1 堂 <code>raw</code> 等級可直接送純文字；第 4 堂 <code>ack</code> 等級重送同一個 <code>client_msg_id</code> 可驗證冪等。
+      </div>
+    </div>
+  </div>
+
+  <div class="pane">
+    <div class="log-head">
+      <h2>收發紀錄 <span class="mut" id="logCount">0 筆</span></h2>
+      <button class="xs" onclick="clearLog()">清空紀錄</button>
+    </div>
+    <div class="log-list" id="log">
+      <div class="log-empty">尚未連線。確認上方 WS 網址後按「連線」即可開始收發測試。</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let ws=null, logs=[];
+
+const qUrl=new URLSearchParams(location.search).get('url');
+$('url').value=qUrl||`ws://${location.host}/ws?user=Web-${Math.random().toString(36).slice(2,5)}`;
+
+function setState(cls,text,connected){
+  const el=$('st');el.className='status '+cls;$('stText').textContent=text;
+  const connecting=cls==='ing';
+  const btn=$('connBtn');
+  btn.textContent=connected?'斷線':connecting?'取消連線':'連線';
+  btn.className=(connected||connecting)?'fault':'pri';
+  $('sendHint').textContent=connected?'已連線，可送出':connecting?'連線中，請稍候…':'尚未連線（請先按上方「連線」）';
+  $('url').disabled=connected||connecting;
+}
+
+function nowStr(){
+  const d=new Date();
+  return d.toTimeString().slice(0,8)+'.'+String(d.getMilliseconds()).padStart(3,'0');
+}
+
+function fmt(raw){
+  if(!$('pretty').checked)return raw;
+  try{return JSON.stringify(JSON.parse(raw),null,2);}catch(_){return raw;}
+}
+
+function bytesOf(s){return new Blob([s]).size;}
+
+function addLog(dir,label,raw,meta){
+  logs.push({t:nowStr(),dir,label,raw,meta:meta||''});
+  if(logs.length>300)logs.shift();
+  rerender();
+}
+
+function rerender(){
+  $('logCount').textContent=`${logs.length} 筆`;
+  const box=$('log');
+  if(!logs.length){box.innerHTML='<div class="log-empty">尚無收發紀錄。</div>';return;}
+  box.innerHTML=logs.map(l=>`<div class="entry">
+    <div class="entry-meta"><span class="dir ${l.dir}">${esc(l.label)}</span><span>${l.t}</span>${l.meta?`<span>${esc(l.meta)}</span>`:''}</div>
+    <pre class="payload">${esc(fmt(l.raw))}</pre>
+  </div>`).join('');
+  box.scrollTop=box.scrollHeight;
+}
+
+function clearLog(){logs=[];rerender();}
+
+function toggleConn(){
+  if(ws&&(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING)){
+    ws.close(1000,'manual close');
+    return;
+  }
+  const url=$('url').value.trim();
+  if(!url)return alert('請先輸入 WS 網址');
+  setState('ing','連線中',false);
+  addLog('sys','CONNECT',url,'HTTP Upgrade 握手中');
+  try{
+    ws=new WebSocket(url);
+  }catch(e){
+    setState('err','網址錯誤',false);
+    addLog('err','error',String(e));
+    return;
+  }
+  ws.onopen=()=>{
+    setState('on','已連線',true);
+    addLog('sys','open 事件',JSON.stringify({event:'open',readyState:ws.readyState,url:ws.url,protocol:ws.protocol||'(none)'}),'101 Switching Protocols');
+  };
+  ws.onmessage=e=>{
+    const isTxt=typeof e.data==='string';
+    const raw=isTxt?e.data:'[Binary]';
+    addLog('rx','message 事件',raw,`${isTxt?'Text Frame':'Binary Frame'} · ${isTxt?bytesOf(raw):e.data.size||0} bytes`);
+  };
+  ws.onerror=()=>addLog('err','error 事件','連線發生錯誤（請檢查 Server、IP 或是否同名重複連線）');
+  ws.onclose=e=>{
+    setState('','已斷線',false);
+    addLog('sys','close 事件',JSON.stringify({event:'close',code:e.code,reason:e.reason||'',wasClean:e.wasClean}));
+    ws=null;
+  };
+}
+
+function sendMsg(){
+  if(!ws||ws.readyState!==WebSocket.OPEN){
+    addLog('err','提示','尚未連線，請先按上方「連線」按鈕（若連線失敗，請檢查 ?user= 是否同名已在線）');
+    $('connBtn').focus();
+    return;
+  }
+  const text=$('msg').value;
+  if(!text.trim()){
+    addLog('err','提示','請先輸入訊息或點上方快捷範本');
+    $('msg').focus();
+    return;
+  }
+  ws.send(text);
+  addLog('tx','send 送出',text,`Text Frame · ${bytesOf(text)} bytes`);
+}
+
+function uid(){return 'web-'+Math.random().toString(36).slice(2,10);}
+function fill(kind){
+  if(kind==='raw')$('msg').value='hello from browser';
+  else if(kind==='send')$('msg').value=JSON.stringify({type:'send',client_msg_id:uid(),text:'哈囉'},null,2);
+  else if(kind==='ping')$('msg').value=JSON.stringify({type:'ping'});
+  else if(kind==='read')$('msg').value=JSON.stringify({type:'read',room_id:'lobby',seq:1},null,2);
+  else $('msg').value=JSON.stringify({type:'send',client_msg_id:uid(),text:kind},null,2);
+  $('msg').focus();
+}
+
+$('msg').addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();sendMsg();}
+});
 </script></body></html>''';
