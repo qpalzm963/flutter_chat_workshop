@@ -36,8 +36,6 @@ class _ChatPageState extends State<ChatPage> {
     _scroll.addListener(_onScroll);
   }
 
-  // TODO(第 6 堂) ③ 快捲到頂（reverse 列表的頂部是 maxScrollExtent）時呼叫 _chat.loadOlder()
-  // TODO(第 6 堂) 在列表最上面放 LoadingOlderIndicator（ui/loading_older_indicator.dart）
   void _onScroll() {
     if (_hasUnseen && _isAtBottom) setState(() => _hasUnseen = false);
   }
