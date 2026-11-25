@@ -86,6 +86,8 @@ class LocalMessageStore {
     return rows.map(Message.fromRow).toList();
   }
 
+  // TODO(第 7 堂) 新增 syncCursor(me)：查出「別人的」最新 seq（本地只有自己的訊息時退回到 MIN(seq) - 1），避免補送 ACK 先回來導致補洞跳過漏掉的訊息
+
   /// 本地最新的 seq（null = 本地還沒有任何 Server 的訊息）
   Future<int?> latestSeq() async => Sqflite.firstIntValue(await _db.rawQuery('SELECT MAX(seq) FROM messages'));
 
