@@ -46,13 +46,12 @@ class ChatController {
     socket.connect();
   }
 
-  // TODO(第 7 堂) ① 每次連上（包含 App 剛啟動）都要：補收（②）＋補送（③）
+  // TODO(第 7 堂) ① 每次連上（包含 App 剛啟動）都要補收（②）
   void _onStatusChanged() {
     if (socket.status.value == ConnectionStatus.connected) _loadLatestIfEmpty();
   }
 
   // TODO(第 7 堂) ② 補收：本地不是空的 → 從 cursor 用 after_seq 一頁一頁補進 DB，直到不足一頁
-  // TODO(第 7 堂) ③ 補送：store.unsent() 依建立時間、帶原本的 clientMsgId 重送，並重設 ACK 逾時
 
   /// 本地是空的（例如換新手機）→ 抓最新一頁。
   /// 本地不是空的就不能抓：最新一頁跟本地最新那則之間可能有 App 不知道的斷層（第 7 堂處理）。
