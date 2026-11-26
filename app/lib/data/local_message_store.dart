@@ -192,6 +192,4 @@ class LocalMessageStore {
     await _db.insert('rooms', room.toRow(), conflictAlgorithm: ConflictAlgorithm.ignore);
     _roomChanges.add(null);
   }
-
-  // TODO(第 8 堂) ④ upsertRooms（GET /rooms、room_added 寫進 rooms 表）、updatePreview（任何房間有新訊息就更新預覽）
 }
