@@ -5,8 +5,7 @@
 ```
 app/      Flutter App（學員寫的；main 上是第 9 堂完成版）
 server/   全班共用的 Server + 講師儀表板（講師開；純 dart:io，零依賴）
-docs/     教學腳本（逐堂流程、結尾鉤子、思考題）
-slides/   每堂簡報
+docs/     教學腳本與文件（逐堂流程、結尾鉤子、思考題、簡報 `openslide/`）
 ```
 
 ## 誰看哪裡
