@@ -28,7 +28,6 @@ class ChatController {
   }
 
   void dispose() {
-    // TODO(第 1 堂) ③ 收尾：取消訂閱、關掉連線和 StreamController
     status.dispose();
   }
 }
