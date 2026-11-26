@@ -58,7 +58,6 @@ class ChatSocket {
   }
 
   void dispose() {
-    // TODO(第 2 堂) 清掉所有 Timer，而且 dispose 之後不能再重連
     _sub?.cancel();
     _channel?.sink.close();
     _events.close();
