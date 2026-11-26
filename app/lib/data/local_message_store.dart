@@ -31,7 +31,6 @@ class LocalMessageStore {
         await db.execute('CREATE INDEX idx_messages_seq ON messages(seq)');
       },
     );
-    // TODO(第 5 堂) ⑤ 上次 App 被殺掉時還在 sending 的，不可能再收到 ACK 了 → 改成 failed
     return LocalMessageStore._(db);
   }
 
